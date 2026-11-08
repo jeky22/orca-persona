@@ -47,7 +47,6 @@ export function parsePersonaFile(name: string, sourcePath: string, text: string)
   const accounts: Partial<Record<AgentId, string>> = {}
   let section: Section = 'none'
   let sawGit = false
-  let sawAccounts = false
   let sawMatch = false
 
   for (let i = 1; i < end; i++) {
@@ -62,8 +61,7 @@ export function parsePersonaFile(name: string, sourcePath: string, text: string)
         const key = m[1]
         if (key === 'match') sawMatch = true
         else if (key === 'git') sawGit = true
-        else if (key === 'accounts') sawAccounts = true
-        else throw new LineError(`알 수 없는 최상위 키: ${key}`)
+        else if (key !== 'accounts') throw new LineError(`알 수 없는 최상위 키: ${key}`)
         section = key
         continue
       }
@@ -85,6 +83,7 @@ export function parsePersonaFile(name: string, sourcePath: string, text: string)
         gitFields[key] = value
       } else {
         if (!AGENT_IDS.includes(key as AgentId)) throw new LineError(`accounts의 알 수 없는 에이전트: ${key}`)
+        if (value === '') throw new LineError(`accounts.${key}의 값이 비어 있습니다`)
         accounts[key as AgentId] = value
       }
     } catch (e) {
@@ -100,7 +99,6 @@ export function parsePersonaFile(name: string, sourcePath: string, text: string)
     git = { name: gitFields.name, email: gitFields.email }
   }
   const hasAccounts = Object.keys(accounts).length > 0
-  if (sawAccounts && !hasAccounts) return fail('accounts에 항목이 없습니다')
   if (!git && !hasAccounts) return fail('git과 accounts가 모두 없는 페르소나는 아무것도 하지 않습니다')
 
   const persona: Persona = { name, sourcePath, match, accounts, body }

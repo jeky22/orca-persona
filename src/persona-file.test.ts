@@ -64,3 +64,28 @@ test('file ending at the closing --- has an empty body', () => {
   assert.equal(isPersonaParseError(r), false)
   if (!isPersonaParseError(r)) assert.equal(r.body, '')
 })
+
+test('git only is valid with or without a bare accounts:', () => {
+  for (const extra of ['', 'accounts:\n']) {
+    const r = parsePersonaFile('x', '/p/x.md', `---\nmatch:\n  - ~/a/**\ngit:\n  name: A\n  email: a@b.c\n${extra}---\n`)
+    assert.equal(isPersonaParseError(r), false)
+    if (!isPersonaParseError(r)) assert.deepEqual(r.accounts, {})
+  }
+})
+
+test('empty account value is an error naming the key', () => {
+  for (const v of ['', ' ""']) {
+    const r = parsePersonaFile('x', '/p/x.md', `---\nmatch:\n  - ~/a/**\naccounts:\n  claude:${v}\n---\n`)
+    assert.equal(isPersonaParseError(r), true)
+    if (isPersonaParseError(r)) assert.ok(r.message.includes('claude'))
+  }
+})
+
+test('quoted values keep # inside quotes and drop a trailing comment', () => {
+  const r = parsePersonaFile('x', '/p/x.md', '---\nmatch:\n  - "~/a # b/**"   # c\ngit:\n  name: \'A # B\' # note\n  email: a@b.c\n---\n')
+  assert.equal(isPersonaParseError(r), false)
+  if (!isPersonaParseError(r)) {
+    assert.deepEqual(r.match, ['~/a # b/**'])
+    assert.equal(r.git?.name, 'A # B')
+  }
+})
