@@ -1,0 +1,78 @@
+{
+  "manifestVersion": 2,
+  "id": "orca-persona",
+  "name": "Orca Persona",
+  "version": "0.1.0",
+  "description": "경로 묶음별로 깃 아이디, Claude/Codex 계정, 지시문을 따라오게 한다.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "settings:own"
+    }
+  ],
+  "contributes": {
+    "panels": [
+      {
+        "id": "persona",
+        "title": "Persona",
+        "icon": "layers",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "hooks": [
+      {
+        "event": "workspace.create.after"
+      },
+      {
+        "event": "agent.launch.before",
+        "onError": "deny"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      },
+      {
+        "on": "workspace.created"
+      },
+      {
+        "on": "workspace.removed"
+      }
+    ],
+    "commands": [
+      {
+        "id": "persona.applyGit",
+        "title": "Persona: 기존 워크스페이스에 깃 아이디 일괄 적용"
+      },
+      {
+        "id": "persona.status",
+        "title": "Persona: 현재 페르소나 보기"
+      }
+    ],
+    "settings": [
+      {
+        "key": "personasDir",
+        "title": "페르소나 디렉터리",
+        "type": "string",
+        "default": "",
+        "placeholder": "~/.orca/personas"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "persona",
+        "text": "persona: —",
+        "command": "persona.status"
+      }
+    ]
+  }
+}
