@@ -114,3 +114,26 @@ test('load: dir이 없으면 []', () => {
   assert.deepEqual(store.load(), [])
   assert.equal(pickByLongestMatch([], '/a', '/h'), null)
 })
+
+test('issues: 파싱 실패가 파일명과 함께 남고, 캐시 히트에도 유지되고, 고치면 사라진다', () => {
+  const t = setup(base)
+  try {
+    t.store.load()
+    assert.deepEqual(t.store.issues.map((i) => i.file), ['broken.md'])
+    assert.ok(t.store.issues[0].message.length > 0)
+    t.store.load() // 캐시 히트
+    assert.deepEqual(t.store.issues.map((i) => i.file), ['broken.md'])
+    const f = path.join(t.dir, 'broken.md')
+    fs.writeFileSync(f, persona(['~/fixed/**']))
+    const future = new Date(Date.now() + 10_000)
+    fs.utimesSync(f, future, future)
+    t.store.load()
+    assert.deepEqual(t.store.issues, [])
+  } finally { t.cleanup() }
+})
+
+test('issues: dir이 없으면 []', () => {
+  const store = new PersonaStore({ dir: '/nonexistent-persona-dir-xyz', home: '/h', log: () => {} })
+  store.load()
+  assert.deepEqual(store.issues, [])
+})

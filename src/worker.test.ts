@@ -400,3 +400,60 @@ test('실행, 같은 이메일 계정이 둘: deny, select 없음', async () => 
     assert.equal(t.selects().length, 0)
   } finally { await t.cleanup() }
 })
+
+test('패널: persona.overview가 그룹·계정·현재 상태를 답한다', async () => {
+  const t = await setup({
+    extraWorkspaces: [{ id: 'w9', kind: 'worktree', name: 'free', path: '/elsewhere/free', branch: 'main', hostId: null }]
+  })
+  try {
+    await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    const o = (await t.worker.request('persona.overview')) as {
+      current: string | null
+      lastApply: { persona: string; ok: boolean } | null
+      groups: { name: string; git: unknown; accounts: Record<string, string>; workspaces: { id: string }[] }[]
+      unmatched: { id: string }[]
+      remote: { id: string }[]
+      accounts: { claude: { accounts: unknown[]; activeAccountId: string | null } }
+      truncated: boolean
+      issues: unknown[]
+    }
+    assert.equal(o.current, 'work')
+    assert.deepEqual(o.lastApply, { persona: 'work', ok: true })
+    assert.deepEqual(o.groups.map((g) => g.name), ['personal', 'work'])
+    assert.deepEqual(o.groups.find((g) => g.name === 'work')?.workspaces.map((w) => w.id), ['w1'])
+    assert.deepEqual(o.groups.find((g) => g.name === 'personal')?.workspaces.map((w) => w.id), ['w2'])
+    assert.deepEqual(o.unmatched.map((w) => w.id), ['w9'])
+    assert.deepEqual(o.remote.map((w) => w.id), ['w3'])
+    assert.equal(o.accounts.claude.activeAccountId, 'a1')
+    assert.equal(o.accounts.claude.accounts.length, 2)
+    assert.equal(o.truncated, false)
+    assert.deepEqual(o.issues, [])
+  } finally { await t.cleanup() }
+})
+
+test('패널: 포커스 적용 뒤 focus가 채워지고 persona.changed를 post한다', async () => {
+  const t = await setup()
+  try {
+    await t.worker.emit('workspace.changed', focus('x'))
+    const o = (await t.worker.request('persona.overview')) as {
+      current: string | null
+      focus: { displayName: string; branch: string } | null
+    }
+    assert.equal(o.current, 'personal')
+    assert.deepEqual(o.focus, { displayName: 'x', branch: 'main' })
+    assert.ok(t.worker.posts.some((p) => p.event === 'persona.changed'))
+  } finally { await t.cleanup() }
+})
+
+test('패널: 실패한 적용은 lastApply에 사유가 남는다', async () => {
+  const t = await setup({ personal: 'ghost@x' })
+  try {
+    await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w2'))
+    const o = (await t.worker.request('persona.overview')) as {
+      lastApply: { persona: string; ok: boolean; reason?: string } | null
+    }
+    assert.equal(o.lastApply?.ok, false)
+    assert.equal(o.lastApply?.persona, 'personal')
+    assert.ok((o.lastApply?.reason ?? '').includes('orca account add'))
+  } finally { await t.cleanup() }
+})

@@ -7,7 +7,8 @@ import { applyGitIdentity } from './git-identity'
 import { defaultInstructionTargets, type InstructionTargets } from './instructions'
 import { createRpcCall, defaultUserDataPath, readRuntimeMetadata, type RpcCall } from './orca-rpc'
 import { PersonaStore } from './persona-store'
-import { failureReason, PersonaSwitcher } from './switch'
+import type { OverviewGroup, OverviewWorkspace, PersonaOverview } from './panel-contract'
+import { failureReason, PersonaSwitcher, type SwitchOutcome } from './switch'
 import type { AgentId } from './types'
 import { isRemoteHost, WorkspaceIndex, type HostList } from './workspaces'
 
@@ -41,8 +42,11 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     const targets = deps.targets ?? defaultInstructionTargets(home)
     const log = (m: string) => orca.log(m)
 
-    const makeStore = async () =>
-      new PersonaStore({ dir: personasDir(String((await orca.settings.get('personasDir')) ?? '')), home, log })
+    let currentDir = ''
+    const makeStore = async () => {
+      currentDir = personasDir(String((await orca.settings.get('personasDir')) ?? ''))
+      return new PersonaStore({ dir: currentDir, home, log })
+    }
     let store = await makeStore()
     orca.settings.onDidChange(async () => {
       try {
@@ -55,7 +59,18 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     const index = new WorkspaceIndex(
       () => orca.host.call('workspace.list') as ReturnType<HostList>
     )
-    const switcher = new PersonaSwitcher({ accounts: new AccountSelector(rpc), targets, log })
+    const selector = new AccountSelector(rpc)
+    const switcher = new PersonaSwitcher({ accounts: selector, targets, log })
+
+    let lastFocus: { displayName: string; branch: string } | null = null
+    let lastApply: PersonaOverview['lastApply'] = null
+    const recordOutcome = (outcome: SwitchOutcome): void => {
+      lastApply =
+        outcome.kind === 'applied'
+          ? { persona: outcome.persona, ok: true }
+          : { persona: outcome.persona, ok: false, reason: outcome.reason }
+      orca.panels.post('persona.changed', { current: switcher.current })
+    }
 
     let lastStatus: string | null = null
     const setStatus = async (text: string): Promise<void> => {
@@ -106,6 +121,66 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       }
     })
 
+    // 패널(보기 전용)이 그리는 전체 그림. 실패해도 되는 조회들은 각자 오류 필드로 돌려준다.
+    orca.panels.handle('persona.overview', async (): Promise<PersonaOverview> => {
+      const personas = store.load()
+      const groups: OverviewGroup[] = personas.map((p) => ({
+        name: p.name,
+        match: p.match,
+        git: p.git ?? null,
+        accounts: {
+          ...(p.accounts.claude !== undefined ? { claude: p.accounts.claude } : {}),
+          ...(p.accounts.codex !== undefined ? { codex: p.accounts.codex } : {})
+        },
+        hasBody: p.body.length > 0,
+        workspaces: []
+      }))
+      const byName = new Map(groups.map((g) => [g.name, g]))
+      const unmatched: OverviewWorkspace[] = []
+      const remote: OverviewWorkspace[] = []
+      let truncated = false
+      let workspacesError: string | null = null
+      try {
+        const list = (await orca.host.call('workspace.list')) as Awaited<ReturnType<HostList>>
+        truncated = list.truncated
+        for (const ws of list.workspaces) {
+          const entry: OverviewWorkspace = { id: ws.id, name: ws.name, branch: ws.branch, path: ws.path, kind: ws.kind }
+          if (isRemoteHost(ws.hostId)) {
+            remote.push(entry)
+            continue
+          }
+          const persona = store.resolve(ws.path)
+          const group = persona ? byName.get(persona.name) : undefined
+          if (group) group.workspaces.push(entry)
+          else unmatched.push(entry)
+        }
+      } catch (e) {
+        workspacesError = failureReason(e)
+      }
+      let accounts: PersonaOverview['accounts'] = null
+      let accountsError: string | null = null
+      try {
+        const snap = await selector.snapshot(true)
+        accounts = { claude: snap.claude, codex: snap.codex }
+      } catch (e) {
+        accountsError = failureReason(e)
+      }
+      return {
+        current: switcher.current,
+        lastApply,
+        focus: lastFocus,
+        personasDir: currentDir,
+        accounts,
+        accountsError,
+        groups,
+        unmatched,
+        remote,
+        truncated,
+        workspacesError,
+        issues: store.issues
+      }
+    })
+
     orca.hooks.on('workspace.create.after', async (event) => {
       const persona = store.resolve(event.path)
       if (!persona?.git) return undefined
@@ -138,6 +213,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       try {
         const agents: AgentId[] = persona.accounts[agent] === undefined ? [] : [agent]
         const outcome = await switcher.apply(persona, agents, { fresh: true, timeoutMs: remaining() })
+        recordOutcome(outcome)
         if (outcome.kind === 'failed') return { deny: outcome.reason }
       } catch (e) {
         return { deny: failureReason(e) }
@@ -171,6 +247,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     type FocusPayload = PluginEvents['workspace.changed']
     const applyFocus = async (payload: FocusPayload): Promise<void> => {
       const ctx = payload.context
+      lastFocus = ctx ? { displayName: ctx.displayName, branch: ctx.branch } : null
       if (!ctx) return
       let name: string | null = null
       try {
@@ -184,6 +261,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         if (!persona) return
         name = persona.name
         const outcome = await switcher.apply(persona)
+        recordOutcome(outcome)
         if (outcome.kind === 'failed') {
           log(`페르소나 ${persona.name} 적용 실패: ${outcome.reason}`)
           await setStatus(`persona: ${persona.name} ⚠`)

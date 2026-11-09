@@ -6,6 +6,9 @@ import type { Persona } from './types'
 
 export type PersonaStoreOptions = { dir: string; home: string; log: (m: string) => void }
 
+/** 마지막 load에서 파싱·읽기에 실패한 파일. 패널이 보여준다. */
+export type PersonaIssue = { file: string; message: string }
+
 type Pick = { kind: 'none' } | { kind: 'one'; persona: Persona } | { kind: 'tie'; a: Persona; b: Persona }
 
 function pick(personas: Persona[], p: string, home: string): Pick {
@@ -47,8 +50,14 @@ export function readRepoOverride(workspacePath: string): string | null {
 export class PersonaStore {
   private cacheKey: string | null = null
   private cached: Persona[] = []
+  private cachedIssues: PersonaIssue[] = []
 
   constructor(private readonly opts: PersonaStoreOptions) {}
+
+  /** 마지막 load가 남긴 실패 목록. load와 같은 캐시를 탄다. */
+  get issues(): PersonaIssue[] {
+    return this.cachedIssues
+  }
 
   load(): Persona[] {
     let names: string[]
@@ -57,6 +66,7 @@ export class PersonaStore {
     } catch {
       this.cacheKey = null
       this.cached = []
+      this.cachedIssues = []
       return this.cached
     }
     const stamped: { file: string; full: string; mtime: number }[] = []
@@ -72,18 +82,26 @@ export class PersonaStore {
     if (key === this.cacheKey) return this.cached
 
     const personas: Persona[] = []
+    const issues: PersonaIssue[] = []
     for (const s of stamped) {
       try {
         const result = parsePersonaFile(s.file.slice(0, -'.md'.length), s.full, fs.readFileSync(s.full, 'utf8'))
-        if (isPersonaParseError(result)) this.opts.log(`페르소나 파일 ${s.file} 파싱 실패: ${result.message}`)
-        else personas.push(result)
+        if (isPersonaParseError(result)) {
+          this.opts.log(`페르소나 파일 ${s.file} 파싱 실패: ${result.message}`)
+          issues.push({ file: s.file, message: result.message })
+        } else {
+          personas.push(result)
+        }
       } catch (e) {
-        this.opts.log(`페르소나 파일 ${s.file} 읽기 실패: ${e instanceof Error ? e.message : String(e)}`)
+        const message = e instanceof Error ? e.message : String(e)
+        this.opts.log(`페르소나 파일 ${s.file} 읽기 실패: ${message}`)
+        issues.push({ file: s.file, message })
       }
     }
     personas.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     this.cacheKey = key
     this.cached = personas
+    this.cachedIssues = issues
     return personas
   }
 
