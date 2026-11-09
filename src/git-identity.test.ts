@@ -1,5 +1,6 @@
 import { assert, test } from 'orca/testing'
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
+import { promisify } from 'node:util'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -65,10 +66,14 @@ test('applyGitIdentity: 링크드 워크트리에 쓰면 메인 저장소에서�
   }
 })
 
-function failingEmailRunner(repo: string): GitRunner {
+const execFileAsync = promisify(execFile)
+
+// Same rejection shape as production (promisified execFile); only the user.email write is intercepted.
+function failingEmailRunner(repo: string, calls: string[][]): GitRunner {
   return async (args) => {
+    calls.push(args)
     if (args[0] === 'user.email') throw Object.assign(new Error('boom'), { code: 255, stderr: 'cannot write' })
-    return { stdout: execFileSync('git', ['-C', repo, 'config', '--local', ...args], { encoding: 'utf8' }) }
+    return execFileAsync('git', ['-C', repo, 'config', '--local', ...args])
   }
 }
 
@@ -86,7 +91,15 @@ test('applyGitIdentity: email 쓰기가 실패하면 방금 쓴 user.name을 되
   try {
     execFileSync('git', ['init', '-q', dir])
     const logs: string[] = []
-    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir)), 'failed')
+    const calls: string[][] = []
+    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir, calls)), 'failed')
+    assert.deepEqual(calls, [
+      ['--get', 'user.email'],
+      ['--get', 'user.name'],
+      ['user.name', id.name],
+      ['user.email', id.email],
+      ['--unset', 'user.name'],
+    ])
     assert.equal(nameExit(dir), 1)
     assert.equal(logs.length, 1)
   } finally {
@@ -100,7 +113,13 @@ test('applyGitIdentity: email 쓰기가 실패하면 기존 user.name 값을 복
     execFileSync('git', ['init', '-q', dir])
     git(dir, 'config', '--local', 'user.name', 'Old Name')
     const logs: string[] = []
-    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir)), 'failed')
+    const calls: string[][] = []
+    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir, calls)), 'failed')
+    assert.deepEqual(calls.slice(2), [
+      ['user.name', id.name],
+      ['user.email', id.email],
+      ['user.name', 'Old Name'],
+    ])
     assert.equal(git(dir, 'config', '--local', 'user.name'), 'Old Name')
     assert.equal(logs.length, 1)
   } finally {
