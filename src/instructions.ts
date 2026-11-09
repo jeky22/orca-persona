@@ -13,10 +13,12 @@ function findSection(content: string, log?: (m: string) => void): { start: numbe
   while (pos < content.length) {
     const nl = content.indexOf('\n', pos)
     const next = nl === -1 ? content.length : nl + 1
-    const line = content.slice(pos, nl === -1 ? content.length : nl)
-    if (start === -1) {
-      if (line.startsWith(BEGIN_PREFIX)) start = pos
-    } else if (line === END) {
+    let line = content.slice(pos, nl === -1 ? content.length : nl)
+    if (line.endsWith('\r')) line = line.slice(0, -1) // CRLF 파일
+    if (line.startsWith(BEGIN_PREFIX)) {
+      // 짝 없는 begin 뒤에 또 begin이 나오면 앞의 것은 그냥 사용자 텍스트로 두고 여기서 다시 시작한다.
+      start = pos
+    } else if (start !== -1 && line === END) {
       return { start, end: next }
     }
     pos = next
@@ -35,14 +37,18 @@ export function replaceMarkedSection(
   body: string,
   log?: (m: string) => void,
 ): string | null {
-  const block = `${BEGIN(name)}\n${body}\n${END}\n`
+  // 파일이 CRLF를 쓰면 블록도 CRLF로 써서 일관성을 유지한다.
   const found = content === null ? null : findSection(content, log)
+  // 기존 구간이 있으면 그 구간의 줄바꿈을, 없으면 파일 전체의 줄바꿈을 따른다.
+  const probe = content === null ? '' : found ? content.slice(found.start, found.end) : content
+  const eol = probe.includes('\r\n') ? '\r\n' : '\n'
+  const block = [BEGIN(name), ...body.split(/\r?\n/), END].join(eol) + eol
   let result: string
   if (content !== null && found) {
     let before = content.slice(0, found.start)
     const after = content.slice(found.end)
     if (body === '') {
-      if (before.endsWith('\n\n')) before = before.slice(0, -1)
+      if (before.endsWith(eol + eol)) before = before.slice(0, -eol.length)
       result = before + after
     } else {
       result = before + block + after
@@ -52,7 +58,7 @@ export function replaceMarkedSection(
   } else if (content === null || content === '') {
     result = block
   } else {
-    const gap = !content.endsWith('\n') ? '\n\n' : content.endsWith('\n\n') ? '' : '\n'
+    const gap = !content.endsWith('\n') ? eol + eol : content.endsWith(eol + eol) ? '' : eol
     result = content + gap + block
   }
   return result === '' ? null : result
@@ -76,6 +82,10 @@ function syncOne(target: string, name: string, body: string, log: (m: string) =>
     current = fs.readFileSync(resolved, 'utf8')
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+    // 끊어진 심볼릭 링크: 링크는 그대로 두고 링크가 가리키는 경로에 새로 만든다.
+    if (fs.lstatSync(target, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      resolved = path.resolve(path.dirname(target), fs.readlinkSync(target))
+    }
   }
   const next = replaceMarkedSection(current, name, body, log)
   // null이면 파일이 없을 때는 만들 것이 없고, 파일이 있으면 구간 제거로 비게 된 것이므로 빈 내용을 쓴다.

@@ -108,3 +108,33 @@ test('syncInstructionFiles: 구간 제거로 빈 파일이 되면 빈 파일로 
     } finally { t2.cleanup() }
   } finally { t.cleanup() }
 })
+
+test('replaceMarkedSection: 짝 없는 begin이 있어도 두 번 호출해 사용자 텍스트를 지우지 않는다', () => {
+  const user = `앞\n${BEGIN('x')}\n사용자가 쓴 것\n`
+  const once = replaceMarkedSection(user, 'work', '규칙')!
+  assert.equal(once, `${user}\n${sec('work', '규칙')}`)
+  assert.equal(replaceMarkedSection(once, 'work', '규칙'), once)
+  assert.equal(replaceMarkedSection(once, 'work', '새 규칙'), `${user}\n${sec('work', '새 규칙')}`)
+})
+
+test('replaceMarkedSection: CRLF 파일은 제자리 교체되고 중복되지 않으며 제거도 된다', () => {
+  const crlf = (b: string) => `${BEGIN('personal')}\r\n${b}\r\n${END}\r\n`
+  const src = '앞\r\n\r\n' + crlf('옛') + '뒤\r\n'
+  const out = replaceMarkedSection(src, 'work', '규칙')!
+  assert.equal(out, `앞\r\n\r\n${BEGIN('work')}\r\n규칙\r\n${END}\r\n뒤\r\n`)
+  assert.equal(replaceMarkedSection(out, 'work', '규칙'), out)
+  assert.equal(replaceMarkedSection(out, 'work', ''), '앞\r\n뒤\r\n')
+})
+
+test('syncInstructionFiles: 끊어진 심볼릭 링크도 링크로 남고 대상에 쓴다', async () => {
+  const t = tmpHome()
+  try {
+    const targets = defaultInstructionTargets(t.home)
+    fs.mkdirSync(path.dirname(targets.claudeMd), { recursive: true })
+    const real = path.join(t.home, 'dotfiles', 'sub', 'real.md')
+    fs.symlinkSync(real, targets.claudeMd)
+    await syncInstructionFiles(targets, 'work', '규칙', () => {})
+    assert.ok(fs.lstatSync(targets.claudeMd).isSymbolicLink())
+    assert.equal(fs.readFileSync(real, 'utf8'), sec('work', '규칙'))
+  } finally { t.cleanup() }
+})
