@@ -33,9 +33,8 @@
 
 ## 현재 상태
 
-코드 완료, **실기 검증 완료** (2026-11-09, Orca 1.4.254). `orca plugin test .` 112개 통과.
-실기에서 버그 2건을 찾아 고쳤다 (아래 체크리스트 4번). resume만 직접 실측을 못 해
-수동 확인 1건이 남아 있다 (6번).
+코드 완료, **실기 검증 전 항목 완료** (2026-11-09, Orca 1.4.254). `orca plugin test .` 112개 통과.
+실기에서 버그 2건을 찾아 고쳤고 (아래 체크리스트 4번), resume도 실측으로 통과했다 (6번).
 
 - `src/persona-file.ts`: 페르소나 .md 제한 문법 파서
 - `src/glob.ts`: match glob, `~` 확장
@@ -58,7 +57,10 @@
   2. **로컬 hostId는 null이 아니라 'local'.** `workspace.list[].hostId`가 로컬 워크스페이스에서 문자열 `"local"`로 와서 (소스 `LOCAL_EXECUTION_HOST_ID='local'`) 전부 원격으로 오판하고 통과시켰다. → null과 'local'을 로컬로 취급.
   수정 후 dev hook과 실제 `orca agent launch` 모두: `continue` + `activeAccountId`가 회사 계정 ✔. 스폰된 claude 프로세스의 `CLAUDE_CONFIG_DIR`이 관리 홈(`…/orca/claude-profiles/<id>/home`)인 것까지 확인 — **훅 안에서 바꾼 선택이 그 실행에 반영된다** (설계 7.6의 추정 실증).
 - [x] 포커스 검증: `orca worktree activate`로 실측. 회사 워크트리(lungfish) → `persona: work` 상태바 + 회사 계정, 개인 워크트리(daggertooth) → personal + 계정 해제, 마커 구간 교체 ✔. 단 **displayName "main"+브랜치 main인 메인 워크트리가 3개라 그 셋은 포커스 경로가 설계대로 무시**한다(로그만 남음). 여러 레포를 main으로 쓰는 실사용에선 포커스 경로가 메인 워크트리에 거의 안 걸린다는 뜻 — README 알려진 한계에 기록.
-- [ ] **resume 검증 — 직접 실측 못 함 (수동 확인 1분 필요).** GUI 자동화(`orca computer`)로 탭 전환까지는 됐으나 클릭 이벤트가 Orca UI의 버튼에 전달되지 않아 resume 버튼을 누를 수 없었다. 간접 근거는 강하다: ① resume·restore는 훅을 안 탄다(1.4.254 asar에서 재확인, `resumeOrigin`/`resumeProviderSession`이 있으면 훅 스킵). ② 에이전트 env는 **스폰 시점의 전역 선택 계정**으로 계산된다 — 실측 4회(선택 전 실행 `~/.claude`, 선택 후 실행 관리 홈). resume도 같은 스폰 파이프라인이라 현재 선택을 쓸 것으로 보인다. **수동 확인**: 회사 워크스페이스에서 Claude 세션을 닫고, 개인 → 회사 클릭 후 그 세션 resume → `/status`의 계정이 회사인지.
+- [x] **resume 검증 — 실측 통과.** 시나리오 그대로: 회사 워크트리(lungfish)에서 Claude 세션을 열어(프롬프트 1건) 닫고 → 개인 클릭(선택 해제, 포인터 파일 비워짐) → 회사 클릭(포인터 = 회사 관리 홈) → 그 워크스페이스 터미널에서 `claude --resume <세션id>` → **복원된 세션의 계정 표시가 회사(관악연구소)**, 프로세스의 `CLAUDE_CONFIG_DIR`도 회사 관리 홈. 즉 **resume은 resume 시점의 전역 선택 계정을 쓰고, 포커스 경로가 그 선택을 미리 맞춰 놓으므로 설계 7.7의 가정이 성립한다.** 메커니즘(소스+실측):
+  - Orca 터미널의 `claude`는 **셸 함수 래퍼**로, 실행 시점마다 `…/orca/claude-profiles/selected-host` **포인터 파일**을 읽어 `CLAUDE_CONFIG_DIR`를 정한다 (포인터 비어 있으면 시스템 기본). `accounts.selectClaude`가 이 포인터를 쓴다(설계 7.6 "포인터 파일 쓰기" 실물 확인). 그래서 **이미 열린 터미널에서 치는 `claude`·`claude --resume`도 항상 그 순간의 선택을 따른다.**
+  - UI 쪽 resume(세션 재개·"채팅 UI에서 계속하기")은 `agentSession.create + resumeFrom`(런타임 RPC)이고, 계정 홈은 `launchFollowsSelection` — 현재 선택으로 리졸브하며 원본 트랜스크립트는 호스트가 찾아 임포트한다 (1.4.254 asar에서 확인).
+  - resume·restore가 `agent.launch.before` 훅을 안 타는 것도 재확인 (`resumeOrigin`/`resumeProviderSession`이 있으면 훅 스킵).
 - [x] 지시문 보존: 마커 밖 머리말·꼬리말 보존 ✔. 본문 비우면 구간 제거 ✔. 관리 계정 홈 `CLAUDE.md`는 `@~/.claude/CLAUDE.md` 스텁 ✔. **관리 홈 실제 경로는 `~/Library/Application Support/orca/claude-profiles/<계정id>/home`** (이 문서의 이전 추정 `orca/profiles/*/claude-profiles/*`가 아니라).
 - [x] 로그: 정상 동작 중 2초 초과 경고·예외 0건. (단 하나의 warn은 아래 타임아웃 실측에서 일부러 만든 것)
 - [x] 워크트리에서 `context.displayName` == `workspace.list[].name` ✔ (lungfish "Review screenshot", daggertooth 실측; 소스에서도 양쪽 다 worktree의 displayName을 쓴다)
@@ -78,5 +80,5 @@
 ## 사용자 결정 필요 (선택)
 
 ~~upstream에 `orca account select` CLI를 추가하는 PR을 낼지.~~ → **1.4.254에 이미 들어왔다.**
-남은 결정: ① 플러그인을 사설 RPC에서 `orca account select` CLI 호출로 전환할지(선택, 급하지 않음),
-② resume 수동 확인(위 체크리스트 유일한 미완 항목) 결과 반영.
+남은 결정: 플러그인을 사설 RPC에서 `orca account select` CLI 호출로 전환할지(선택, 급하지 않음).
+체크리스트는 전 항목 완료됐다.
