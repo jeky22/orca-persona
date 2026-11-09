@@ -1,5 +1,6 @@
 import {
   AccountNeedsSignInError,
+  AmbiguousAccountError,
   UnregisteredAccountError,
   type AccountSelector,
   type EnsureResult
@@ -72,6 +73,9 @@ export class PersonaSwitcher {
 export function failureReason(e: unknown): string {
   if (e instanceof UnregisteredAccountError) {
     return `${e.agent} 계정 ${e.email}이(가) Orca에 등록돼 있지 않습니다. orca account add --agent ${e.agent} 로 등록하세요.`
+  }
+  if (e instanceof AmbiguousAccountError) {
+    return `${e.agent} 계정 ${e.email}이(가) Orca에 둘 이상 등록돼 있어(${e.ids.join(', ')}) 고를 수 없습니다. 페르소나에 계정을 하나만 남기거나 Orca에서 중복 계정을 정리하세요.`
   }
   if (e instanceof AccountNeedsSignInError) {
     return `${e.agent} 계정 ${e.email}의 로그인이 만료됐습니다. Orca 설정에서 다시 로그인하세요.`

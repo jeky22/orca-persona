@@ -23,6 +23,13 @@ export class AccountNeedsSignInError extends Error {
   }
 }
 
+export class AmbiguousAccountError extends Error {
+  constructor(public agent: AgentId, public email: string, public ids: string[]) {
+    super(`${agent} 계정 ${email}이(가) 여러 번 등록됨: ${ids.join(', ')}`)
+    this.name = 'AmbiguousAccountError'
+  }
+}
+
 export type EnsureResult = 'already-active' | 'selected'
 
 const norm = (s: string) => s.trim().toLowerCase()
@@ -67,8 +74,10 @@ export class AccountSelector {
     const wanted = norm(email)
     let accountId: string | null = null
     if (wanted !== 'system') {
-      const match = state.accounts.find((a) => a.email !== null && norm(a.email) === wanted)
-      if (!match) throw new UnregisteredAccountError(agent, email)
+      const matches = state.accounts.filter((a) => a.email !== null && norm(a.email) === wanted)
+      if (matches.length === 0) throw new UnregisteredAccountError(agent, email)
+      if (matches.length > 1) throw new AmbiguousAccountError(agent, email, matches.map((a) => a.id))
+      const match = matches[0]
       if (match.needsSignIn) throw new AccountNeedsSignInError(agent, email)
       accountId = match.id
     }

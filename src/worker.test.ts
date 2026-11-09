@@ -20,6 +20,7 @@ type Opts = {
   truncated?: boolean
   hang?: string
   gateFirstSelect?: Promise<void>
+  duplicateWork?: boolean
   launchDeadlineMs?: number
 }
 
@@ -42,7 +43,14 @@ async function setup(opts: Opts = {}) {
     if (opts.hang === method) return new Promise<unknown>(() => {})
     if (method === 'accounts.list') {
       return {
-        claude: { accounts: [{ id: 'a1', email: 'work@x' }, { id: 'a2', email: 'me@x' }], activeAccountId: active },
+        claude: {
+          accounts: [
+            { id: 'a1', email: 'work@x' },
+            { id: 'a2', email: 'me@x' },
+            ...(opts.duplicateWork ? [{ id: 'a3', email: 'WORK@x' }] : [])
+          ],
+          activeAccountId: active
+        },
         codex: { accounts: [], activeAccountId: null }
       }
     }
@@ -350,5 +358,18 @@ test('포커스, 연속 이벤트: 진행 중 apply 뒤에는 마지막 이벤�
     assert.deepEqual(applied, ['페르소나 work 적용', '페르소나 work 적용'])
     assert.deepEqual(t.selects().map((c) => c[1]), [{ accountId: 'a1' }])
     assert.equal(t.statusTexts().at(-1), 'persona: work')
+  } finally { await t.cleanup() }
+})
+
+test('실행, 같은 이메일 계정이 둘: deny, select 없음', async () => {
+  const t = await setup({ duplicateWork: true })
+  try {
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    assert.equal(d.kind, 'deny')
+    if (d.kind === 'deny') {
+      assert.equal(d.reason,
+        'claude 계정 work@x이(가) Orca에 둘 이상 등록돼 있어(a1, a3) 고를 수 없습니다. 페르소나에 계정을 하나만 남기거나 Orca에서 중복 계정을 정리하세요.')
+    }
+    assert.equal(t.selects().length, 0)
   } finally { await t.cleanup() }
 })

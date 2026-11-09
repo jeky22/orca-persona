@@ -1,5 +1,5 @@
 import { assert, test } from 'orca/testing'
-import { AccountNeedsSignInError, AccountSelector, UnregisteredAccountError } from './accounts'
+import { AccountNeedsSignInError, AccountSelector, AmbiguousAccountError, UnregisteredAccountError } from './accounts'
 
 type Entry = { id: string; email: string | null; needsSignIn?: boolean }
 
@@ -140,4 +140,18 @@ test('timeoutMs is forwarded to every RPC call', async () => {
     ['accounts.list', 321],
     ['accounts.selectClaude', 321]
   ])
+})
+
+test('rejects an email registered more than once (case-insensitive) without select', async () => {
+  const f = fake([{ id: 'a1', email: 'Work@X' }, { id: 'a2', email: 'work@x' }, { id: 'a3', email: 'me@x' }])
+  const s = new AccountSelector(f.call)
+  await assert.rejects(s.ensureSelected('claude', 'work@x'), (e: unknown) => {
+    return (
+      e instanceof AmbiguousAccountError &&
+      e.agent === 'claude' &&
+      e.email === 'work@x' &&
+      e.ids.join(',') === 'a1,a2'
+    )
+  })
+  assert.deepEqual(f.calls, [['accounts.list', { refreshUsage: false }]])
 })
