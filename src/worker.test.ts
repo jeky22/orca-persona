@@ -116,7 +116,7 @@ async function setup(opts: Opts = {}) {
 const launch = (agent: string, workspaceId: string | null) => ({
   agent,
   workspaceId,
-  workspaceKind: workspaceId === null ? null : 'worktree',
+  workspaceKind: workspaceId === null ? null : ('worktree' as const),
   command: agent,
   env: {}
 })
