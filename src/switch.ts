@@ -31,7 +31,11 @@ export class PersonaSwitcher {
   }
 
   /** 지시문 동기화 → agents(기본: persona.accounts에 있는 것) 각각 ensureSelected. 첫 실패에서 멈춘다. */
-  async apply(persona: Persona, agents?: AgentId[], opts?: { fresh?: boolean }): Promise<SwitchOutcome> {
+  async apply(
+    persona: Persona,
+    agents?: AgentId[],
+    opts?: { fresh?: boolean; timeoutMs?: number }
+  ): Promise<SwitchOutcome> {
     await syncInstructionFiles(this.deps.targets, persona.name, persona.body, this.deps.log)
     const list = agents ?? AGENT_ORDER.filter((a) => persona.accounts[a] !== undefined)
     const accounts: Partial<Record<AgentId, EnsureResult>> = {}
@@ -39,7 +43,10 @@ export class PersonaSwitcher {
       const email = persona.accounts[agent]
       if (email === undefined) continue
       try {
-        accounts[agent] = await this.deps.accounts.ensureSelected(agent, email, { fresh: opts?.fresh })
+        accounts[agent] = await this.deps.accounts.ensureSelected(agent, email, {
+          fresh: opts?.fresh,
+          timeoutMs: opts?.timeoutMs
+        })
       } catch (e) {
         const reason = failureReason(e)
         this.deps.log(`persona ${persona.name}: ${reason}`)

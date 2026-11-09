@@ -146,3 +146,28 @@ test('apply: fresh 옵션은 accounts.list를 다시 호출', async () => {
     t.cleanup()
   }
 })
+
+test('apply: timeoutMs 옵션을 계정 RPC까지 전달', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-'))
+  try {
+    const seen: [string, number | undefined][] = []
+    const call = async (method: string, _params: unknown, timeoutMs?: number) => {
+      seen.push([method, timeoutMs])
+      if (method === 'accounts.list') return { claude: { accounts: [{ id: 'a1', email: 'work@x' }], activeAccountId: null } }
+      return {}
+    }
+    const sw = new PersonaSwitcher({
+      accounts: new AccountSelector(call),
+      targets: defaultInstructionTargets(fs.realpathSync(root)),
+      log: () => {}
+    })
+    const out = await sw.apply(work, ['claude'], { fresh: true, timeoutMs: 777 })
+    assert.equal(out.kind, 'applied')
+    assert.deepEqual(seen, [
+      ['accounts.list', 777],
+      ['accounts.selectClaude', 777]
+    ])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

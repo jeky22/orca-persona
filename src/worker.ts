@@ -17,7 +17,15 @@ export type WorkerDeps = {
   rpc: RpcCall
   applyGit: typeof applyGitIdentity
   targets: InstructionTargets
+  /** agent.launch.before 전체 기한(ms). 테스트용; 기본 LAUNCH_HOOK_DEADLINE_MS. */
+  launchDeadlineMs?: number
 }
+
+/** Orca 훅 예산은 2초이고 시간 초과 시 통과될 수 있으므로(설계 6절) 그보다 먼저 스스로 거부한다. */
+export const LAUNCH_HOOK_DEADLINE_MS = 1700
+const MIN_STAGE_TIMEOUT_MS = 100
+const LAUNCH_DEADLINE_REASON =
+  '페르소나 적용이 1.7초 안에 끝나지 않아 실행을 거부했습니다 (Orca 런타임이 느리거나 응답하지 않음).'
 
 const isAgent = (a: unknown): a is AgentId => a === 'claude' || a === 'codex'
 
@@ -106,34 +114,58 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       return undefined
     })
 
-    orca.hooks.on('agent.launch.before', async (event, next) => {
-      const agent = event.agent
-      if (!isAgent(agent) || event.workspaceId === null) return undefined
+    const launchDeadlineMs = deps.launchDeadlineMs ?? LAUNCH_HOOK_DEADLINE_MS
+    type LaunchVerdict = 'pass' | 'continue' | { deny: string }
+
+    const launchBody = async (agent: AgentId, workspaceId: string, deadlineAt: number): Promise<LaunchVerdict> => {
+      const remaining = () => Math.max(MIN_STAGE_TIMEOUT_MS, deadlineAt - Date.now())
       let ws
       try {
-        ws = await index.byId(event.workspaceId)
+        ws = await index.byId(workspaceId)
       } catch (e) {
         return { deny: failureReason(e) }
       }
       if (!ws) {
-        log(`워크스페이스 ${event.workspaceId}를 찾지 못해 페르소나를 적용하지 않음`)
-        return undefined
+        log(`워크스페이스 ${workspaceId}를 찾지 못해 페르소나를 적용하지 않음`)
+        return 'pass'
       }
       if (ws.hostId !== null) {
         log(`원격 워크스페이스 ${ws.name}(${ws.hostId})는 페르소나를 적용하지 않음`)
-        return undefined
+        return 'pass'
       }
       const persona = store.resolve(ws.path)
-      if (!persona) return undefined
+      if (!persona) return 'pass'
       try {
         const agents: AgentId[] = persona.accounts[agent] === undefined ? [] : [agent]
-        const outcome = await switcher.apply(persona, agents, { fresh: true })
+        const outcome = await switcher.apply(persona, agents, { fresh: true, timeoutMs: remaining() })
         if (outcome.kind === 'failed') return { deny: outcome.reason }
       } catch (e) {
         return { deny: failureReason(e) }
       }
       await reportCurrent()
-      return next(event)
+      return 'continue'
+    }
+
+    orca.hooks.on('agent.launch.before', async (event, next) => {
+      const agent = event.agent
+      if (!isAgent(agent) || event.workspaceId === null) return undefined
+      const deadlineAt = Date.now() + launchDeadlineMs
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<LaunchVerdict>((resolve) => {
+        timer = setTimeout(() => {
+          log(`워크스페이스 ${event.workspaceId}의 ${agent} 실행 거부: ${LAUNCH_DEADLINE_REASON}`)
+          resolve({ deny: LAUNCH_DEADLINE_REASON })
+        }, launchDeadlineMs)
+      })
+      let verdict: LaunchVerdict
+      try {
+        verdict = await Promise.race([launchBody(agent, event.workspaceId, deadlineAt), deadline])
+      } finally {
+        clearTimeout(timer)
+      }
+      if (verdict === 'pass') return undefined
+      if (verdict === 'continue') return next(event)
+      return verdict
     })
 
     orca.events.on('workspace.changed', async (payload) => {

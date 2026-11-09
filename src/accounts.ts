@@ -49,16 +49,20 @@ export class AccountSelector {
     this.ttlMs = opts?.ttlMs ?? 30_000
   }
 
-  async snapshot(force = false): Promise<AccountSnapshot> {
+  async snapshot(force = false, timeoutMs?: number): Promise<AccountSnapshot> {
     if (!force && this.cache && Date.now() - this.cache.at < this.ttlMs) return this.cache.snap
-    const raw = (await this.call('accounts.list', { refreshUsage: false })) as { claude?: unknown; codex?: unknown } | null
+    const raw = (await this.call('accounts.list', { refreshUsage: false }, timeoutMs)) as { claude?: unknown; codex?: unknown } | null
     const snap: AccountSnapshot = { claude: parseAgent(raw?.claude), codex: parseAgent(raw?.codex) }
     this.cache = { at: Date.now(), snap }
     return snap
   }
 
-  async ensureSelected(agent: AgentId, email: string, opts?: { fresh?: boolean }): Promise<EnsureResult> {
-    const snap = await this.snapshot(opts?.fresh === true)
+  async ensureSelected(
+    agent: AgentId,
+    email: string,
+    opts?: { fresh?: boolean; timeoutMs?: number }
+  ): Promise<EnsureResult> {
+    const snap = await this.snapshot(opts?.fresh === true, opts?.timeoutMs)
     const state = snap[agent]
     const wanted = norm(email)
     let accountId: string | null = null
@@ -69,7 +73,7 @@ export class AccountSelector {
       accountId = match.id
     }
     if (state.activeAccountId === accountId) return 'already-active'
-    await this.call(agent === 'claude' ? 'accounts.selectClaude' : 'accounts.selectCodex', { accountId })
+    await this.call(agent === 'claude' ? 'accounts.selectClaude' : 'accounts.selectCodex', { accountId }, opts?.timeoutMs)
     state.activeAccountId = accountId
     return 'selected'
   }

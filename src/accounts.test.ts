@@ -126,3 +126,18 @@ test('already-active but needsSignIn still throws without select', async () => {
   })
   assert.deepEqual(f.calls, [['accounts.list', { refreshUsage: false }]])
 })
+
+test('timeoutMs is forwarded to every RPC call', async () => {
+  const seen: [string, number | undefined][] = []
+  const call = async (method: string, _params: unknown, timeoutMs?: number) => {
+    seen.push([method, timeoutMs])
+    if (method === 'accounts.list') return { claude: { accounts: [{ id: 'a1', email: 'work@x' }], activeAccountId: null } }
+    return {}
+  }
+  const s = new AccountSelector(call)
+  assert.equal(await s.ensureSelected('claude', 'work@x', { fresh: true, timeoutMs: 321 }), 'selected')
+  assert.deepEqual(seen, [
+    ['accounts.list', 321],
+    ['accounts.selectClaude', 321]
+  ])
+})

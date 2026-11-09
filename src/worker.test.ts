@@ -18,6 +18,8 @@ type Opts = {
   extraWorkspaces?: Record<string, unknown>[]
   gitResults?: Record<string, 'applied' | 'skipped-existing' | 'skipped-not-git' | 'failed'>
   truncated?: boolean
+  hang?: string
+  launchDeadlineMs?: number
 }
 
 async function setup(opts: Opts = {}) {
@@ -30,10 +32,13 @@ async function setup(opts: Opts = {}) {
     fs.writeFileSync(path.join(dir, 'personal.md'), persona(`${home}/side/**`, opts.personal ?? 'me@x', false))
   }
   const rpcCalls: [string, unknown][] = []
+  const rpcTimeouts: [string, number | undefined][] = []
   let active: string | null = null
-  const rpc = async (method: string, params: unknown) => {
+  const rpc = async (method: string, params: unknown, timeoutMs?: number) => {
     rpcCalls.push([method, params])
+    rpcTimeouts.push([method, timeoutMs])
     if (opts.rpcError) throw opts.rpcError
+    if (opts.hang === method) return new Promise<unknown>(() => {})
     if (method === 'accounts.list') {
       return {
         claude: { accounts: [{ id: 'a1', email: 'work@x' }, { id: 'a2', email: 'me@x' }], activeAccountId: active },
@@ -72,7 +77,8 @@ async function setup(opts: Opts = {}) {
         home,
         rpc,
         applyGit,
-        targets: defaultInstructionTargets(home)
+        targets: defaultInstructionTargets(home),
+        launchDeadlineMs: opts.launchDeadlineMs
       })
     },
     { host }
@@ -84,6 +90,7 @@ async function setup(opts: Opts = {}) {
     worker,
     host,
     rpcCalls,
+    rpcTimeouts,
     gitCalls,
     selects,
     statusTexts,
@@ -290,5 +297,32 @@ test('일괄 적용, truncated: 결과에 (truncated) 덧붙임', async () => {
   const t = await setup({ truncated: true })
   try {
     assert.equal(await t.worker.command('persona.applyGit'), 'applied 1, skipped 0, no persona 1, remote 1 (truncated)')
+  } finally { await t.cleanup() }
+})
+
+test('실행, 기한 초과: accounts.list가 응답하지 않으면 기한 안에 deny', async () => {
+  const t = await setup({ hang: 'accounts.list', launchDeadlineMs: 100 })
+  try {
+    const started = Date.now()
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    const elapsed = Date.now() - started
+    assert.equal(d.kind, 'deny')
+    if (d.kind === 'deny') {
+      assert.equal(d.reason,
+        '페르소나 적용이 1.7초 안에 끝나지 않아 실행을 거부했습니다 (Orca 런타임이 느리거나 응답하지 않음).')
+    }
+    assert.ok(elapsed < 1000, `elapsed ${elapsed}ms`)
+    assert.ok(t.worker.logs.some((l) => l.includes('1.7초 안에 끝나지 않아')))
+    const listTimeout = t.rpcTimeouts.find((c) => c[0] === 'accounts.list')?.[1]
+    assert.ok(typeof listTimeout === 'number' && listTimeout >= 100 && listTimeout <= 100, `timeout ${listTimeout}`)
+  } finally { await t.cleanup() }
+})
+
+test('실행, 정상: 계정 RPC에 남은 기한(기본 1700ms 이하)을 timeout으로 전달', async () => {
+  const t = await setup()
+  try {
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    assert.equal(d.kind, 'continue')
+    for (const [, ms] of t.rpcTimeouts) assert.ok(typeof ms === 'number' && ms >= 100 && ms <= 1700, `timeout ${ms}`)
   } finally { await t.cleanup() }
 })
