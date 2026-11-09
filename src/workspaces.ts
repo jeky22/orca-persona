@@ -9,6 +9,24 @@ export type WorkspaceEntry = {
 
 export type HostList = () => Promise<{ workspaces: WorkspaceEntry[]; truncated: boolean }>
 
+/** 로컬 워크스페이스의 hostId는 null이 아니라 'local'일 수 있다 (Orca LOCAL_EXECUTION_HOST_ID). */
+export function isRemoteHost(hostId: string | null): boolean {
+  return hostId !== null && hostId !== 'local'
+}
+
+/** 실행 훅의 workspaceId는 `<repoId>::<경로>` 원형인데 workspace.list의 id는
+ *  `identity:...` 형식이라 어긋난다 (1.4.254에서 확인). id가 그대로 맞으면 그것을,
+ *  아니면 `::` 뒤의 경로가 정확히 하나에 맞을 때 그 항목을 쓴다. */
+function findById(entries: WorkspaceEntry[], id: string): WorkspaceEntry | undefined {
+  const exact = entries.find((w) => w.id === id)
+  if (exact) return exact
+  const sep = id.indexOf('::')
+  if (sep <= 0) return undefined
+  const path = id.slice(sep + 2)
+  const byPath = entries.filter((w) => w.path === path)
+  return byPath.length === 1 ? byPath[0] : undefined
+}
+
 export class WorkspaceIndex {
   private entries: WorkspaceEntry[] = []
   private loadedAt: number | null = null
@@ -34,9 +52,9 @@ export class WorkspaceIndex {
   }
 
   async byId(id: string): Promise<WorkspaceEntry | null> {
-    const hit = (await this.load(false)).find((w) => w.id === id)
+    const hit = findById(await this.load(false), id)
     if (hit) return hit
-    return (await this.load(true)).find((w) => w.id === id) ?? null
+    return findById(await this.load(true), id) ?? null
   }
 
   /** Exactly one match → it; zero or several → null. An empty branch means "no branch" (folder). */

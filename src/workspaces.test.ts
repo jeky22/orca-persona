@@ -20,6 +20,26 @@ test('byId returns the matching entry', async () => {
   assert.equal((await idx.byId('w2'))?.path, '/Users/me/side/glab')
 })
 
+test('byId는 id가 어긋나면 repoId::path의 경로로 다시 찾는다', async () => {
+  // 실행 훅은 `<repoId>::<경로>`를 주지만 workspace.list의 id는 `identity:...`다 (1.4.254에서 확인).
+  const a = { ...w1, id: 'identity:wt2:local:aaa' }
+  const idx = new WorkspaceIndex(fake([a, w2]).list)
+  assert.equal((await idx.byId('f689::/Users/me/workspace/glab-server'))?.id, 'identity:wt2:local:aaa')
+})
+
+test('byId 경로 폴백: 같은 경로가 여럿이면 특정하지 않는다', async () => {
+  const a = { ...w1, id: 'i1' }
+  const b = { ...w1, id: 'i2', hostId: 'ssh-1' }
+  const idx = new WorkspaceIndex(fake([a, b]).list)
+  assert.equal(await idx.byId('f689::/Users/me/workspace/glab-server'), null)
+})
+
+test('byId 경로 폴백: 정확한 id가 있으면 그쪽이 이긴다', async () => {
+  const decoy = { ...w2, id: 'f689::/Users/me/workspace/glab-server' }
+  const idx = new WorkspaceIndex(fake([w1, decoy]).list)
+  assert.equal((await idx.byId('f689::/Users/me/workspace/glab-server'))?.path, '/Users/me/side/glab')
+})
+
 test('byNameAndBranch matches name and branch exactly', async () => {
   const idx = new WorkspaceIndex(fake([w1, w2]).list)
   assert.equal((await idx.byNameAndBranch('glab', 'main'))?.id, 'w2')

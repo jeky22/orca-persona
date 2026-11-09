@@ -9,7 +9,7 @@ import { createRpcCall, defaultUserDataPath, readRuntimeMetadata, type RpcCall }
 import { PersonaStore } from './persona-store'
 import { failureReason, PersonaSwitcher } from './switch'
 import type { AgentId } from './types'
-import { WorkspaceIndex, type HostList } from './workspaces'
+import { isRemoteHost, WorkspaceIndex, type HostList } from './workspaces'
 
 export type WorkerDeps = {
   home: string
@@ -80,7 +80,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         let remote = 0
         // 같은 저장소 설정에 대한 쓰기가 겹치지 않도록 순차 처리한다.
         for (const ws of list.workspaces) {
-          if (ws.hostId !== null) {
+          if (isRemoteHost(ws.hostId)) {
             remote++
             continue
           }
@@ -129,7 +129,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         log(`워크스페이스 ${workspaceId}를 찾지 못해 페르소나를 적용하지 않음`)
         return 'pass'
       }
-      if (ws.hostId !== null) {
+      if (isRemoteHost(ws.hostId)) {
         log(`원격 워크스페이스 ${ws.name}(${ws.hostId})는 페르소나를 적용하지 않음`)
         return 'pass'
       }
@@ -179,7 +179,7 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
           log(`워크스페이스 ${ctx.displayName} (${ctx.branch})를 하나로 특정하지 못해 페르소나를 적용하지 않음`)
           return
         }
-        if (ws.hostId !== null) return
+        if (isRemoteHost(ws.hostId)) return
         const persona = store.resolve(ws.path)
         if (!persona) return
         name = persona.name

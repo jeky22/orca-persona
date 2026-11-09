@@ -167,6 +167,33 @@ test('실행, 원격: 통과', async () => {
   } finally { await t.cleanup() }
 })
 
+test('실행, hostId local + 원시 repoId::path id: 로컬로 보고 적용', async () => {
+  // 실제 Orca(1.4.254): 훅의 workspaceId는 `<repoId>::<경로>`, workspace.list는
+  // id `identity:...`에 hostId 'local'을 준다.
+  const t = await setup({
+    extraWorkspaces: [
+      { id: 'identity:wt2:local:z1', kind: 'worktree', name: 'repo-id', path: '__HOME__/workspace/repo-id', branch: 'main', hostId: 'local' }
+    ]
+  })
+  try {
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', `f689::${t.home}/workspace/repo-id`))
+    assert.equal(d.kind, 'continue')
+    assert.deepEqual(t.selects().map((c) => c[1]), [{ accountId: 'a1' }])
+  } finally { await t.cleanup() }
+})
+
+test('포커스: hostId local은 원격이 아니다', async () => {
+  const t = await setup({
+    extraWorkspaces: [
+      { id: 'identity:wt2:local:z2', kind: 'worktree', name: 'local-repo', path: '__HOME__/workspace/local-repo', branch: 'main', hostId: 'local' }
+    ]
+  })
+  try {
+    await t.worker.emit('workspace.changed', focus('local-repo'))
+    assert.deepEqual(t.selects().map((c) => c[1]), [{ accountId: 'a1' }])
+  } finally { await t.cleanup() }
+})
+
 test('실행, 플로팅: 통과', async () => {
   const t = await setup()
   try {
