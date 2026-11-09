@@ -1,6 +1,6 @@
 import * as os from 'node:os'
 import * as path from 'node:path'
-import type { OrcaWorkerApi } from 'orca/worker'
+import type { OrcaWorkerApi, PluginEvents } from 'orca/worker'
 import { AccountSelector } from './accounts'
 import { expandHome } from './glob'
 import { applyGitIdentity } from './git-identity'
@@ -168,7 +168,8 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       return verdict
     })
 
-    orca.events.on('workspace.changed', async (payload) => {
+    type FocusPayload = PluginEvents['workspace.changed']
+    const applyFocus = async (payload: FocusPayload): Promise<void> => {
       const ctx = payload.context
       if (!ctx) return
       let name: string | null = null
@@ -193,6 +194,27 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       } catch (e) {
         log(`페르소나 ${name ?? '?'} 적용 실패: ${failureReason(e)}`)
         await setStatus(`persona: ${name ?? '?'} ⚠`)
+      }
+    }
+
+    // 포커스 경로 디바운스(설계 8절): 처리 중에 온 이벤트는 마지막 하나만 남겨 처리 뒤에 적용한다.
+    let focusRunning = false
+    let pendingFocus: FocusPayload | null = null
+    orca.events.on('workspace.changed', async (payload) => {
+      if (focusRunning) {
+        pendingFocus = payload
+        return
+      }
+      focusRunning = true
+      try {
+        let next: FocusPayload | null = payload
+        while (next !== null) {
+          pendingFocus = null
+          await applyFocus(next)
+          next = pendingFocus
+        }
+      } finally {
+        focusRunning = false
       }
     })
 

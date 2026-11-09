@@ -19,6 +19,7 @@ type Opts = {
   gitResults?: Record<string, 'applied' | 'skipped-existing' | 'skipped-not-git' | 'failed'>
   truncated?: boolean
   hang?: string
+  gateFirstSelect?: Promise<void>
   launchDeadlineMs?: number
 }
 
@@ -45,7 +46,10 @@ async function setup(opts: Opts = {}) {
         codex: { accounts: [], activeAccountId: null }
       }
     }
-    if (method === 'accounts.selectClaude') active = (params as { accountId: string }).accountId
+    if (method === 'accounts.selectClaude') {
+      if (opts.gateFirstSelect && rpcCalls.filter((c) => c[0] === method).length === 1) await opts.gateFirstSelect
+      active = (params as { accountId: string }).accountId
+    }
     return {}
   }
   const gitCalls: [string, GitIdentity][] = []
@@ -324,5 +328,27 @@ test('실행, 정상: 계정 RPC에 남은 기한(기본 1700ms 이하)을 timeo
     const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
     assert.equal(d.kind, 'continue')
     for (const [, ms] of t.rpcTimeouts) assert.ok(typeof ms === 'number' && ms >= 100 && ms <= 1700, `timeout ${ms}`)
+  } finally { await t.cleanup() }
+})
+
+test('포커스, 연속 이벤트: 진행 중 apply 뒤에는 마지막 이벤트만 적용(latest-wins)', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const t = await setup({ gateFirstSelect: gate })
+  try {
+    const e1 = t.worker.emit('workspace.changed', focus('repo'))
+    const end = Date.now() + 1000
+    while (t.selects().length === 0) {
+      if (Date.now() > end) throw new Error('first select never happened')
+      await new Promise((r) => setTimeout(r, 2))
+    }
+    await t.worker.emit('workspace.changed', focus('x'))
+    await t.worker.emit('workspace.changed', focus('repo'))
+    release()
+    await e1
+    const applied = t.worker.logs.filter((l) => /^페르소나 \S+ 적용$/.test(l))
+    assert.deepEqual(applied, ['페르소나 work 적용', '페르소나 work 적용'])
+    assert.deepEqual(t.selects().map((c) => c[1]), [{ accountId: 'a1' }])
+    assert.equal(t.statusTexts().at(-1), 'persona: work')
   } finally { await t.cleanup() }
 })

@@ -171,3 +171,76 @@ test('apply: timeoutMs 옵션을 계정 RPC까지 전달', async () => {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+const until = async (cond: () => boolean, ms = 1000) => {
+  const end = Date.now() + ms
+  while (!cond()) {
+    if (Date.now() > end) throw new Error('until: timed out')
+    await new Promise((r) => setTimeout(r, 2))
+  }
+}
+
+test('apply: 겹친 호출은 직렬화 — 첫 apply가 끝나기 전 두 번째의 지시문·select 없음', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-'))
+  try {
+    const targets = defaultInstructionTargets(fs.realpathSync(root))
+    const calls: [string, unknown][] = []
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let gated = false
+    const call = async (method: string, params: unknown) => {
+      calls.push([method, params])
+      if (method === 'accounts.list') {
+        return {
+          claude: { accounts: [{ id: 'a1', email: 'work@x' }, { id: 'a2', email: 'me@x' }], activeAccountId: null }
+        }
+      }
+      if (!gated) {
+        gated = true
+        await gate
+      }
+      return {}
+    }
+    const sw = new PersonaSwitcher({ accounts: new AccountSelector(call), targets, log: () => {} })
+    const p1 = sw.apply(persona('work', { claude: 'work@x' }, '회사 규칙'))
+    const p2 = sw.apply(persona('personal', { claude: 'me@x' }, '개인 규칙'))
+    await until(() => calls.length >= 2)
+    await new Promise((r) => setTimeout(r, 30))
+    assert.deepEqual(calls, [
+      ['accounts.list', { refreshUsage: false }],
+      ['accounts.selectClaude', { accountId: 'a1' }]
+    ])
+    const mid = fs.readFileSync(targets.claudeMd, 'utf8')
+    assert.ok(mid.includes(BEGIN('work')) && !mid.includes('개인 규칙'))
+    release()
+    const [o1, o2] = await Promise.all([p1, p2])
+    assert.equal(o1.kind, 'applied')
+    assert.equal(o2.kind, 'applied')
+    assert.deepEqual(calls, [
+      ['accounts.list', { refreshUsage: false }],
+      ['accounts.selectClaude', { accountId: 'a1' }],
+      ['accounts.selectClaude', { accountId: 'a2' }]
+    ])
+    assert.ok(fs.readFileSync(targets.claudeMd, 'utf8').includes('개인 규칙'))
+    assert.equal(sw.current, 'personal')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('apply: 한 호출이 throw해도 다음 호출은 정상 진행', async () => {
+  const t = setup()
+  try {
+    fs.mkdirSync(t.targets.claudeMd, { recursive: true })
+    const p1 = t.sw.apply(work)
+    const p2 = t.sw.apply(work)
+    await assert.rejects(p1)
+    await assert.rejects(p2)
+    fs.rmSync(t.targets.claudeMd, { recursive: true, force: true })
+    const out = await t.sw.apply(work)
+    assert.equal(out.kind, 'applied')
+    assert.equal(t.sw.current, 'work')
+  } finally {
+    t.cleanup()
+  }
+})

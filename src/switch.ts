@@ -22,6 +22,8 @@ const AGENT_ORDER: AgentId[] = ['claude', 'codex']
 
 export class PersonaSwitcher {
   private _current: string | null = null
+  /** apply 본문을 겹치지 않게 잇는 체인. 앞선 호출의 실패는 삼켜 다음 호출을 막지 않는다. */
+  private chain: Promise<unknown> = Promise.resolve()
 
   constructor(private deps: SwitchDeps) {}
 
@@ -30,8 +32,17 @@ export class PersonaSwitcher {
     return this._current
   }
 
-  /** 지시문 동기화 → agents(기본: persona.accounts에 있는 것) 각각 ensureSelected. 첫 실패에서 멈춘다. */
-  async apply(
+  /**
+   * 지시문 동기화 → agents(기본: persona.accounts에 있는 것) 각각 ensureSelected. 첫 실패에서 멈춘다.
+   * 호출은 직렬화된다: 앞선 apply가 끝난 뒤에 본문이 시작된다 (계정과 지시문이 어긋나지 않도록).
+   */
+  apply(persona: Persona, agents?: AgentId[], opts?: { fresh?: boolean; timeoutMs?: number }): Promise<SwitchOutcome> {
+    const run = this.chain.then(() => this.applyNow(persona, agents, opts))
+    this.chain = run.catch(() => undefined)
+    return run
+  }
+
+  private async applyNow(
     persona: Persona,
     agents?: AgentId[],
     opts?: { fresh?: boolean; timeoutMs?: number }
