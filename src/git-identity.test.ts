@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { applyGitIdentity } from './git-identity'
+import { applyGitIdentity, type GitRunner } from './git-identity'
 
 const id = { name: 'Work Me', email: 'work@example.com' }
 
@@ -62,5 +62,48 @@ test('applyGitIdentity: 링크드 워크트리에 쓰면 메인 저장소에서�
   } finally {
     fs.rmSync(main, { recursive: true, force: true })
     fs.rmSync(path.dirname(wt), { recursive: true, force: true })
+  }
+})
+
+function failingEmailRunner(repo: string): GitRunner {
+  return async (args) => {
+    if (args[0] === 'user.email') throw Object.assign(new Error('boom'), { code: 255, stderr: 'cannot write' })
+    return { stdout: execFileSync('git', ['-C', repo, 'config', '--local', ...args], { encoding: 'utf8' }) }
+  }
+}
+
+function nameExit(repo: string): number {
+  try {
+    execFileSync('git', ['-C', repo, 'config', '--local', '--get', 'user.name'], { stdio: 'pipe' })
+    return 0
+  } catch (e) {
+    return (e as { status: number }).status
+  }
+}
+
+test('applyGitIdentity: email 쓰기가 실패하면 방금 쓴 user.name을 되돌린다', async () => {
+  const dir = tmp()
+  try {
+    execFileSync('git', ['init', '-q', dir])
+    const logs: string[] = []
+    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir)), 'failed')
+    assert.equal(nameExit(dir), 1)
+    assert.equal(logs.length, 1)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('applyGitIdentity: email 쓰기가 실패하면 기존 user.name 값을 복원한다', async () => {
+  const dir = tmp()
+  try {
+    execFileSync('git', ['init', '-q', dir])
+    git(dir, 'config', '--local', 'user.name', 'Old Name')
+    const logs: string[] = []
+    assert.equal(await applyGitIdentity(dir, id, (m) => logs.push(m), failingEmailRunner(dir)), 'failed')
+    assert.equal(git(dir, 'config', '--local', 'user.name'), 'Old Name')
+    assert.equal(logs.length, 1)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
