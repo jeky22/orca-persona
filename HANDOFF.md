@@ -33,7 +33,7 @@
 
 ## 현재 상태
 
-코드 완료. `orca plugin test .` 98개 통과. README.md 작성됨.
+코드 완료. `orca plugin test .` 107개 통과. README.md 작성됨.
 
 - `src/persona-file.ts`: 페르소나 .md 제한 문법 파서
 - `src/glob.ts`: match glob, `~` 확장
@@ -58,6 +58,12 @@
 - [ ] resume 검증 (설계 7.7의 추정): 회사 워크스페이스에서 Claude 세션을 열고 닫은 뒤, 개인 프로젝트 클릭 → 다시 회사 프로젝트 클릭 → 그 세션을 resume → `/status`(또는 `claude` 상단 계정 표시)가 회사 계정인지 확인. 결과를 README "알려진 한계"에 사실대로 기록
 - [ ] 지시문 보존 검증 (설계 7.10): 계정을 바꾼 뒤 `cat "$(ls -d ~/Library/Application\ Support/orca/profiles/*/claude-profiles/*/home | head -1)/CLAUDE.md"`가 `@~/.claude/CLAUDE.md` 스텁인지, 전역 파일의 마커 밖 내용이 그대로인지 확인
 - [ ] 로그 확인: `orca plugin logs orca-persona`에 2초 초과 경고가 없는지
+- [ ] 워크트리 워크스페이스(폴더만이 아니라)에서 `workspace.changed`의 `context.displayName`이 `workspace.list[].name`과 같은지 확인
+- [ ] 브랜치 형식이 양쪽에서 같은지 확인 (`context.branch`와 `workspace.list[].branch`가 둘 다 `main`인지, 한쪽이 `refs/heads/main`인지)
+- [ ] `system` 값 페르소나로 `accounts.selectClaude { accountId: null }`이 실제로 관리 계정 선택을 해제하는지 확인
+- [ ] `accounts.list` 응답 형태가 `{ claude: { accounts: [{ id, email, needsSignIn }], activeAccountId } }`인지 확인 (`orca account list --json`과 비교)
+- [ ] `onError: "deny"`인 훅이 시간 초과되면 거부인지 통과인지 확인: 일부러 2초 넘게 걸리는 dev 훅을 띄워 본다 (플러그인은 1.7초에 스스로 거부하지만 Orca 쪽 동작을 README에 적는다)
+- [ ] 1.4.248 이상에서 `orca plugin validate .` 통과
 - [ ] 검증 결과를 README(알려진 한계의 "실기 검증" 항목 포함)와 이 문서에 반영하고 커밋: `docs: README와 실기 검증 결과`
 
 ## 사용자 결정 필요 (선택)
