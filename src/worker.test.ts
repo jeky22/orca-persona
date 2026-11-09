@@ -1,4 +1,4 @@
-import { assert, mockHost, mountWorker, test } from 'orca/testing'
+import { assert, hostError, mockHost, mountWorker, test } from 'orca/testing'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -14,6 +14,7 @@ type Opts = {
   personal?: string
   seedPersonas?: boolean
   rpcError?: Error
+  listError?: boolean
   extraWorkspaces?: Record<string, unknown>[]
 }
 
@@ -52,7 +53,14 @@ async function setup(opts: Opts = {}) {
     ...(opts.extraWorkspaces ?? [])
   ]
   const host = mockHost({
-    results: { 'workspace.list': { workspaces, truncated: false }, 'statusBar.update': {} }
+    results: {
+      'workspace.list': opts.listError
+        ? () => {
+            throw hostError('boom', 'list failed')
+          }
+        : { workspaces, truncated: false },
+      'statusBar.update': {}
+    }
   })
   const worker = await mountWorker(
     {
@@ -110,7 +118,10 @@ test('실행, 정상: 계정 select, env 불변, 상태바', async () => {
     const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
     assert.equal(d.kind, 'continue')
     if (d.kind === 'continue') assert.deepEqual(d.event.env, {})
-    assert.deepEqual(t.selects(), [['accounts.selectClaude', { accountId: 'a1' }]])
+    assert.deepEqual(t.rpcCalls, [
+      ['accounts.list', { refreshUsage: false }],
+      ['accounts.selectClaude', { accountId: 'a1' }]
+    ])
     assert.equal(t.statusTexts().at(-1), 'persona: work')
   } finally { await t.cleanup() }
 })
@@ -180,7 +191,7 @@ test('포커스, 중복 이름: 무시하고 log', async () => {
   try {
     await t.worker.emit('workspace.changed', focus('repo'))
     assert.equal(t.rpcCalls.length, 0)
-    assert.ok(t.worker.logs.some((l) => l.includes('repo')))
+    assert.ok(t.worker.logs.some((l) => l.includes('워크스페이스 repo (main)를 하나로 특정하지 못해')))
   } finally { await t.cleanup() }
 })
 
@@ -211,5 +222,47 @@ test('페르소나 없음: 모두 통과, RPC 0회', async () => {
     await t.worker.emit('workspace.changed', focus('repo'))
     assert.equal(t.rpcCalls.length, 0)
     assert.equal(await t.worker.command('persona.status'), 'persona: —')
+  } finally { await t.cleanup() }
+})
+
+test('실행: fresh로 캐시된 스냅샷 뒤에도 accounts.list를 다시 호출', async () => {
+  const t = await setup()
+  try {
+    await t.worker.emit('workspace.changed', focus('repo'))
+    const before = t.rpcCalls.filter((c) => c[0] === 'accounts.list').length
+    assert.equal(before, 1)
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    assert.equal(d.kind, 'continue')
+    assert.equal(t.rpcCalls.filter((c) => c[0] === 'accounts.list').length, 2)
+  } finally { await t.cleanup() }
+})
+
+test('포커스: 캐시 창 안에서는 accounts.list를 다시 부르지 않음', async () => {
+  const t = await setup()
+  try {
+    await t.worker.emit('workspace.changed', focus('repo'))
+    await t.worker.emit('workspace.changed', focus('x'))
+    assert.equal(t.rpcCalls.filter((c) => c[0] === 'accounts.list').length, 1)
+    assert.equal(t.selects().length, 2)
+  } finally { await t.cleanup() }
+})
+
+test('포커스, 원격 워크스페이스: 무시', async () => {
+  const t = await setup()
+  try {
+    await t.worker.emit('workspace.changed', focus('r'))
+    assert.equal(t.rpcCalls.length, 0)
+  } finally { await t.cleanup() }
+})
+
+test('workspace.list 실패: launch는 deny, 포커스는 log와 경고 상태바', async () => {
+  const t = await setup({ listError: true })
+  try {
+    const d = await t.worker.hooks.fire('agent.launch.before', launch('claude', 'w1'))
+    assert.equal(d.kind, 'deny')
+    await t.worker.emit('workspace.changed', focus('repo'))
+    assert.ok(t.worker.logs.some((l) => l.includes('페르소나 ? 적용 실패')))
+    assert.equal(t.statusTexts().at(-1), 'persona: ? ⚠')
+    assert.equal(t.rpcCalls.length, 0)
   } finally { await t.cleanup() }
 })

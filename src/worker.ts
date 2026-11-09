@@ -37,7 +37,11 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
       new PersonaStore({ dir: personasDir(String((await orca.settings.get('personasDir')) ?? '')), home, log })
     let store = await makeStore()
     orca.settings.onDidChange(async () => {
-      store = await makeStore()
+      try {
+        store = await makeStore()
+      } catch (e) {
+        log(`personasDir 설정을 다시 읽지 못해 기존 설정을 유지함: ${failureReason(e)}`)
+      }
     })
 
     const index = new WorkspaceIndex(
@@ -72,7 +76,12 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     orca.hooks.on('agent.launch.before', async (event, next) => {
       const agent = event.agent
       if (!isAgent(agent) || event.workspaceId === null) return undefined
-      const ws = await index.byId(event.workspaceId)
+      let ws
+      try {
+        ws = await index.byId(event.workspaceId)
+      } catch (e) {
+        return { deny: failureReason(e) }
+      }
       if (!ws) {
         log(`워크스페이스 ${event.workspaceId}를 찾지 못해 페르소나를 적용하지 않음`)
         return undefined
@@ -97,15 +106,17 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     orca.events.on('workspace.changed', async (payload) => {
       const ctx = payload.context
       if (!ctx) return
-      const ws = await index.byNameAndBranch(ctx.displayName, ctx.branch)
-      if (!ws) {
-        log(`워크스페이스 ${ctx.displayName} (${ctx.branch})를 하나로 특정하지 못해 페르소나를 적용하지 않음`)
-        return
-      }
-      if (ws.hostId !== null) return
-      const persona = store.resolve(ws.path)
-      if (!persona) return
+      let name: string | null = null
       try {
+        const ws = await index.byNameAndBranch(ctx.displayName, ctx.branch)
+        if (!ws) {
+          log(`워크스페이스 ${ctx.displayName} (${ctx.branch})를 하나로 특정하지 못해 페르소나를 적용하지 않음`)
+          return
+        }
+        if (ws.hostId !== null) return
+        const persona = store.resolve(ws.path)
+        if (!persona) return
+        name = persona.name
         const outcome = await switcher.apply(persona)
         if (outcome.kind === 'failed') {
           log(`페르소나 ${persona.name} 적용 실패: ${outcome.reason}`)
@@ -115,8 +126,8 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         log(`페르소나 ${persona.name} 적용`)
         await reportCurrent()
       } catch (e) {
-        log(`페르소나 ${persona.name} 적용 실패: ${failureReason(e)}`)
-        await setStatus(`persona: ${persona.name} ⚠`)
+        log(`페르소나 ${name ?? '?'} 적용 실패: ${failureReason(e)}`)
+        await setStatus(`persona: ${name ?? '?'} ⚠`)
       }
     })
 
