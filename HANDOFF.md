@@ -31,8 +31,35 @@
 - Orca를 **1.4.248 이상**으로 올려야 한다. 훅이 전부 그때부터다.
   현재 설치본 1.4.247, 최신 1.4.250.
 
-## 다음 단계
+## 현재 상태
 
-설계 문서를 바탕으로 구현 계획을 쓴다 (superpowers:writing-plans). 코드는 아직
-한 줄도 없다. 1.4.247 설치본 소스를 `/tmp/orca-asar/out`에 풀어 둔 상태였으나
-임시 경로라 다시 풀어야 할 수 있다 (`npx @electron/asar extract`).
+코드 완료. `orca plugin test .` 98개 통과. README.md 작성됨.
+
+- `src/persona-file.ts`: 페르소나 .md 제한 문법 파서
+- `src/glob.ts`: match glob, `~` 확장
+- `src/persona-store.ts`: 디렉터리 로드·캐시, 가장 긴 패턴 선택, `.orca-persona` 예외
+- `src/git-identity.ts`: `git config --local` 적용 (기존 user.email 있으면 건너뜀)
+- `src/instructions.ts`: 전역 CLAUDE.md/AGENTS.md 마커 구간 교체
+- `src/orca-rpc.ts`: Orca 런타임 소켓 RPC 클라이언트
+- `src/accounts.ts`: 이메일→id 매핑, 계정 선택
+- `src/workspaces.ts`: workspace.list 색인 (id, 이름+브랜치)
+- `src/switch.ts`: 지시문 + 계정 적용, 실패 메시지
+- `src/worker.ts`: 훅·이벤트·커맨드·상태바 배선
+
+## 실기 검증 대기
+
+설치된 Orca가 1.4.247이다. 훅은 **1.4.248 이상**에서만 되므로 실기 검증을 못 했다. Orca를 올린 뒤 아래를 진행한다.
+
+- [ ] `orca --version`이 1.4.248 이상인지 확인
+- [ ] 실제 페르소나 작성: `~/.orca/personas/work.md`(match `~/workspace/**`), `personal.md`(match `~/side/**`, `~/orca/projects/**`). 계정 이메일은 `orca account list --json`의 `claude.accounts[].email`과 일치시킨다. 계정이 없으면 `orca account add --agent claude`부터
+- [ ] 로드: `orca plugin dev load .` → 출력의 fingerprint로 `orca plugin dev load . --approve <fingerprint>`; `orca plugin list`에서 `orca-persona` enabled
+- [ ] 훅 검증: `orca plugin dev hook . agent.launch.before --data '{"agent":"claude","workspaceId":"<회사 워크스페이스 id>","workspaceKind":"worktree","command":"claude","env":{}}'` → `continue`, 그리고 `orca account list --json`의 `claude.activeAccountId`가 회사 계정 id. `workspaceId`는 `orca worktree list --json`(또는 `orca plugin dev request`로 `workspace.list`)에서 얻는다
+- [ ] 포커스 검증: 사이드바에서 개인 프로젝트 클릭 → 활성 id가 개인 계정으로 바뀌고 상태바가 `persona: personal`. 회사 클릭 → 반대로. `cat ~/.claude/CLAUDE.md`에 마커 구간이 교체돼 있다
+- [ ] resume 검증 (설계 7.7의 추정): 회사 워크스페이스에서 Claude 세션을 열고 닫은 뒤, 개인 프로젝트 클릭 → 다시 회사 프로젝트 클릭 → 그 세션을 resume → `/status`(또는 `claude` 상단 계정 표시)가 회사 계정인지 확인. 결과를 README "알려진 한계"에 사실대로 기록
+- [ ] 지시문 보존 검증 (설계 7.10): 계정을 바꾼 뒤 `cat "$(ls -d ~/Library/Application\ Support/orca/profiles/*/claude-profiles/*/home | head -1)/CLAUDE.md"`가 `@~/.claude/CLAUDE.md` 스텁인지, 전역 파일의 마커 밖 내용이 그대로인지 확인
+- [ ] 로그 확인: `orca plugin logs orca-persona`에 2초 초과 경고가 없는지
+- [ ] 검증 결과를 README(알려진 한계의 "실기 검증" 항목 포함)와 이 문서에 반영하고 커밋: `docs: README와 실기 검증 결과`
+
+## 사용자 결정 필요 (선택)
+
+upstream에 `orca account select --agent claude|codex` CLI를 추가하는 PR을 낼지. 런타임 메서드가 이미 있어 CLI 핸들러 몇 줄이다. 머지되면 플러그인이 사설 소켓 RPC 대신 CLI 호출로 갈아탈 수 있다 (설계 7.6). 낼지 말지, 시점은 실기 검증 뒤로 할지 정해 달라.
