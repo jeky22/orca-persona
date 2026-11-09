@@ -8,6 +8,16 @@ export type OverviewWorkspace = {
   branch: string | null
   path: string
   kind: 'worktree' | 'folder'
+  /** 레포 루트 .orca-persona가 가리키는 이름 (수동 지정). 없으면 null. */
+  override: string | null
+}
+
+/** 패널 편집 폼이 저장하는 내용. 본문(지시문)은 파일에 있던 것을 보존한다. */
+export type PersonaDraft = {
+  name: string
+  match: string[]
+  git: GitIdentity | null
+  accounts: { claude?: string; codex?: string }
 }
 
 export type OverviewGroup = {
@@ -45,6 +55,10 @@ export type PersonaOverview = {
 declare module 'orca' {
   interface PluginRequests {
     'persona.overview': { output: PersonaOverview }
+    'persona.save': { input: PersonaDraft; output: { ok: true } }
+    'persona.delete': { input: { name: string }; output: { ok: true } }
+    /** persona가 null이면 수동 지정을 지우고 경로 규칙으로 돌아간다. */
+    'persona.assign': { input: { workspaceId: string; persona: string | null }; output: { ok: true } }
   }
   interface PluginPanelEvents {
     'persona.changed': { current: string | null }

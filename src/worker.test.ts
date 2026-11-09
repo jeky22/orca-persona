@@ -457,3 +457,95 @@ test('패널: 실패한 적용은 lastApply에 사유가 남는다', async () =>
     assert.ok((o.lastApply?.reason ?? '').includes('orca account add'))
   } finally { await t.cleanup() }
 })
+
+test('패널: persona.save가 새 파일을 만들고, 기존 본문을 보존한다', async () => {
+  const t = await setup()
+  try {
+    await t.worker.request('persona.save', {
+      name: 'open',
+      match: ['~/oss/**'],
+      git: { name: 'Me', email: 'me@oss' },
+      accounts: {}
+    })
+    const dir = path.join(t.home, '.orca', 'personas')
+    assert.ok(fs.existsSync(path.join(dir, 'open.md')))
+    const o = (await t.worker.request('persona.overview')) as { groups: { name: string }[] }
+    assert.deepEqual(o.groups.map((g) => g.name), ['open', 'personal', 'work'])
+    // 기존 work.md의 본문('규칙')은 편집 저장 후에도 남는다
+    await t.worker.request('persona.save', {
+      name: 'work',
+      match: [`${t.home}/workspace/**`, `${t.home}/extra/**`],
+      git: { name: 'W', email: 'w@x' },
+      accounts: { claude: 'work@x' }
+    })
+    const text = fs.readFileSync(path.join(dir, 'work.md'), 'utf8')
+    assert.ok(text.includes('규칙'))
+    assert.ok(text.includes(`${t.home}/extra/**`))
+    assert.ok(t.worker.posts.some((p) => p.event === 'persona.changed'))
+  } finally { await t.cleanup() }
+})
+
+test('패널: persona.save가 잘못된 입력을 거부한다', async () => {
+  const t = await setup()
+  try {
+    for (const bad of [
+      { name: '../evil', match: ['~/a/**'], git: { name: 'a', email: 'b' }, accounts: {} },
+      { name: 'ok', match: [], git: { name: 'a', email: 'b' }, accounts: {} },
+      { name: 'ok', match: ['~/a/**'], git: null, accounts: {} } // git도 accounts도 없음
+    ]) {
+      let rejected = false
+      try {
+        await t.worker.request('persona.save', bad)
+      } catch {
+        rejected = true
+      }
+      assert.ok(rejected, `거부돼야 함: ${JSON.stringify(bad)}`)
+    }
+    assert.ok(!fs.existsSync(path.join(t.home, '.orca', 'personas', 'ok.md')))
+  } finally { await t.cleanup() }
+})
+
+test('패널: persona.assign이 .orca-persona를 쓰고 지우며, 원격·미지정을 거부한다', async () => {
+  const t = await setup()
+  try {
+    fs.mkdirSync(path.join(t.home, 'workspace', 'repo'), { recursive: true })
+    await t.worker.request('persona.assign', { workspaceId: 'w1', persona: 'personal' })
+    const f = path.join(t.home, 'workspace', 'repo', '.orca-persona')
+    assert.equal(fs.readFileSync(f, 'utf8').trim(), 'personal')
+    const o = (await t.worker.request('persona.overview')) as {
+      groups: { name: string; workspaces: { id: string; override: string | null }[] }[]
+    }
+    const personal = o.groups.find((g) => g.name === 'personal')
+    assert.ok(personal?.workspaces.some((w) => w.id === 'w1' && w.override === 'personal'))
+    await t.worker.request('persona.assign', { workspaceId: 'w1', persona: null })
+    assert.ok(!fs.existsSync(f))
+    for (const bad of [
+      { workspaceId: 'w3', persona: 'work' }, // 원격
+      { workspaceId: 'nope', persona: 'work' }, // 없는 워크스페이스
+      { workspaceId: 'w1', persona: 'ghost' } // 없는 페르소나
+    ]) {
+      let rejected = false
+      try {
+        await t.worker.request('persona.assign', bad)
+      } catch {
+        rejected = true
+      }
+      assert.ok(rejected, `거부돼야 함: ${JSON.stringify(bad)}`)
+    }
+  } finally { await t.cleanup() }
+})
+
+test('패널: persona.delete가 파일을 지우고, 없는 이름은 거부한다', async () => {
+  const t = await setup()
+  try {
+    await t.worker.request('persona.delete', { name: 'personal' })
+    assert.ok(!fs.existsSync(path.join(t.home, '.orca', 'personas', 'personal.md')))
+    let rejected = false
+    try {
+      await t.worker.request('persona.delete', { name: 'personal' })
+    } catch {
+      rejected = true
+    }
+    assert.ok(rejected)
+  } finally { await t.cleanup() }
+})

@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import type { OrcaWorkerApi, PluginEvents } from 'orca/worker'
@@ -6,8 +7,9 @@ import { expandHome } from './glob'
 import { applyGitIdentity } from './git-identity'
 import { defaultInstructionTargets, type InstructionTargets } from './instructions'
 import { createRpcCall, defaultUserDataPath, readRuntimeMetadata, type RpcCall } from './orca-rpc'
-import { PersonaStore } from './persona-store'
-import type { OverviewGroup, OverviewWorkspace, PersonaOverview } from './panel-contract'
+import { PersonaStore, readRepoOverride } from './persona-store'
+import type { OverviewGroup, OverviewWorkspace, PersonaDraft, PersonaOverview } from './panel-contract'
+import { isPersonaParseError, parsePersonaFile } from './persona-file'
 import { failureReason, PersonaSwitcher, type SwitchOutcome } from './switch'
 import type { AgentId } from './types'
 import { isRemoteHost, WorkspaceIndex, type HostList } from './workspaces'
@@ -144,11 +146,19 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         const list = (await orca.host.call('workspace.list')) as Awaited<ReturnType<HostList>>
         truncated = list.truncated
         for (const ws of list.workspaces) {
-          const entry: OverviewWorkspace = { id: ws.id, name: ws.name, branch: ws.branch, path: ws.path, kind: ws.kind }
+          const entry: OverviewWorkspace = {
+            id: ws.id,
+            name: ws.name,
+            branch: ws.branch,
+            path: ws.path,
+            kind: ws.kind,
+            override: null
+          }
           if (isRemoteHost(ws.hostId)) {
             remote.push(entry)
             continue
           }
+          entry.override = readRepoOverride(ws.path)
           const persona = store.resolve(ws.path)
           const group = persona ? byName.get(persona.name) : undefined
           if (group) group.workspaces.push(entry)
@@ -179,6 +189,90 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
         workspacesError,
         issues: store.issues
       }
+    })
+
+    // 패널 편집: 폼 → .md 저장. 파서를 되돌려 돌려(라운드트립) 검증하므로 규칙이 한 곳에만 산다.
+    const validName = (name: unknown): name is string =>
+      typeof name === 'string' && name.length > 0 && name.length <= 64 && !/[\\/]/.test(name) && !name.startsWith('.')
+    const quoteValue = (v: string): string => {
+      if (/["\n\r]/.test(v)) throw new Error('값에 따옴표나 줄바꿈은 쓸 수 없습니다.')
+      return /#/.test(v) || v !== v.trim() ? `"${v}"` : v
+    }
+    const personaFile = (name: string) => path.join(currentDir, `${name}.md`)
+
+    orca.panels.handle('persona.save', async (input) => {
+      const draft = (input ?? {}) as PersonaDraft
+      if (!validName(draft.name)) throw new Error('이름은 경로 구분자 없이 1~64자여야 하고 .으로 시작할 수 없습니다.')
+      const match = Array.isArray(draft.match) ? draft.match.map((g) => String(g).trim()).filter((g) => g !== '') : []
+      const lines = ['---', 'match:']
+      for (const g of match) lines.push(`  - ${quoteValue(g)}`)
+      const git = draft.git ?? null
+      if (git !== null) {
+        if (typeof git.name !== 'string' || git.name.trim() === '' || typeof git.email !== 'string' || git.email.trim() === '')
+          throw new Error('git은 name과 email이 모두 필요합니다 (안 쓰려면 둘 다 비우세요).')
+        lines.push('git:', `  name: ${quoteValue(git.name.trim())}`, `  email: ${quoteValue(git.email.trim())}`)
+      }
+      const agents = (['claude', 'codex'] as const).flatMap((a) => {
+        const v = draft.accounts?.[a]
+        if (v === undefined) return []
+        if (typeof v !== 'string' || v.trim() === '') throw new Error(`${a} 계정 값이 비어 있습니다 (안 쓰려면 키를 빼세요).`)
+        return [[a, v.trim()] as const]
+      })
+      if (agents.length > 0) {
+        lines.push('accounts:')
+        for (const [a, v] of agents) lines.push(`  ${a}: ${quoteValue(v)}`)
+      }
+      lines.push('---')
+      const body = store.load().find((p) => p.name === draft.name)?.body ?? ''
+      const text = lines.join('\n') + '\n' + (body === '' ? '' : `\n${body}\n`)
+      const parsed = parsePersonaFile(draft.name, personaFile(draft.name), text)
+      if (isPersonaParseError(parsed)) throw new Error(parsed.message)
+      fs.mkdirSync(currentDir, { recursive: true })
+      const tmp = personaFile(draft.name) + '.tmp'
+      fs.writeFileSync(tmp, text)
+      fs.renameSync(tmp, personaFile(draft.name))
+      log(`페르소나 ${draft.name} 저장`)
+      orca.panels.post('persona.changed', { current: switcher.current })
+      return { ok: true } as const
+    })
+
+    orca.panels.handle('persona.delete', async (input) => {
+      const name = (input as { name?: unknown } | undefined)?.name
+      if (!validName(name)) throw new Error('지울 페르소나 이름이 올바르지 않습니다.')
+      try {
+        fs.unlinkSync(personaFile(name))
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`페르소나 ${name}가 없습니다.`)
+        throw e
+      }
+      log(`페르소나 ${name} 삭제`)
+      orca.panels.post('persona.changed', { current: switcher.current })
+      return { ok: true } as const
+    })
+
+    // 레포 루트 .orca-persona 토글: 경로 규칙보다 우선하는 수동 지정 (설계 7.3).
+    orca.panels.handle('persona.assign', async (input) => {
+      const { workspaceId, persona } = (input ?? {}) as { workspaceId?: unknown; persona?: unknown }
+      if (typeof workspaceId !== 'string' || workspaceId === '') throw new Error('워크스페이스 id가 없습니다.')
+      if (persona !== null && !validName(persona)) throw new Error('페르소나 이름이 올바르지 않습니다.')
+      const ws = await index.byId(workspaceId)
+      if (!ws) throw new Error('워크스페이스를 찾지 못했습니다.')
+      if (isRemoteHost(ws.hostId)) throw new Error('원격 워크스페이스에는 지정하지 않습니다.')
+      if (persona !== null && !store.load().some((p) => p.name === persona))
+        throw new Error(`페르소나 ${persona}가 없습니다.`)
+      const marker = path.join(ws.path, '.orca-persona')
+      if (persona === null) {
+        try {
+          fs.unlinkSync(marker)
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+        }
+      } else {
+        fs.writeFileSync(marker, `${persona}\n`)
+      }
+      log(`워크스페이스 ${ws.name} 수동 지정: ${persona ?? '해제'}`)
+      orca.panels.post('persona.changed', { current: switcher.current })
+      return { ok: true } as const
     })
 
     orca.hooks.on('workspace.create.after', async (event) => {
