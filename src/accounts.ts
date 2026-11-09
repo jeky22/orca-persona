@@ -57,8 +57,8 @@ export class AccountSelector {
     return snap
   }
 
-  async ensureSelected(agent: AgentId, email: string): Promise<EnsureResult> {
-    const snap = await this.snapshot()
+  async ensureSelected(agent: AgentId, email: string, opts?: { fresh?: boolean }): Promise<EnsureResult> {
+    const snap = await this.snapshot(opts?.fresh === true)
     const state = snap[agent]
     const wanted = norm(email)
     let accountId: string | null = null
