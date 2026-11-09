@@ -93,6 +93,7 @@ export class PersonaStore {
     if (override) {
       const hit = personas.find((p) => p.name === override)
       if (hit) return hit
+      this.opts.log(`.orca-persona가 가리키는 페르소나 ${override}가 없어 경로 규칙을 사용함: ${workspacePath}`)
     }
     const candidates = [workspacePath]
     try {

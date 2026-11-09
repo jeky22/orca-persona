@@ -50,10 +50,10 @@ test('resolve: 가장 긴 패턴이 이긴다', () => {
 })
 
 test('resolve: 같은 패턴 동률이면 null + log에 두 이름', () => {
-  const t = setup({ 'a.md': persona(['~/workspace/**']), 'b.md': persona(['~/workspace/**']) })
+  const t = setup({ 'tie-one.md': persona(['~/workspace/**']), 'tie-two.md': persona(['~/workspace/**']) })
   try {
     assert.equal(t.store.resolve(path.join(t.home, 'workspace/x')), null)
-    assert.ok(t.logs.some((l) => l.includes('a') && l.includes('b')))
+    assert.ok(t.logs.some((l) => l.includes('tie-one') && l.includes('tie-two')))
   } finally { t.cleanup() }
 })
 
@@ -66,6 +66,17 @@ test('resolve: .orca-persona 오버라이드가 우선', () => {
     assert.equal(readRepoOverride(ws), 'personal')
     assert.equal(t.store.resolve(ws)?.name, 'personal')
     assert.equal(readRepoOverride(path.join(t.home, 'nope')), null)
+  } finally { t.cleanup() }
+})
+
+test('resolve: 없는 페르소나를 가리키는 .orca-persona는 log 후 경로 규칙 사용', () => {
+  const t = setup(base)
+  try {
+    const ws = path.join(t.home, 'workspace/proj')
+    fs.mkdirSync(ws, { recursive: true })
+    fs.writeFileSync(path.join(ws, '.orca-persona'), 'ghost\n')
+    assert.equal(t.store.resolve(ws)?.name, 'work')
+    assert.ok(t.logs.some((l) => l.includes('ghost')))
   } finally { t.cleanup() }
 })
 
