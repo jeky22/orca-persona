@@ -15,6 +15,10 @@ export class WorkspaceIndex {
   private readonly ttlMs: number
   private readonly now: () => number
   private lastTruncated = false
+  private generation = 0
+  private seq = 0
+  private committedSeq = 0
+  private pending: Promise<WorkspaceEntry[]> | null = null
 
   constructor(
     private readonly list: HostList,
@@ -45,14 +49,30 @@ export class WorkspaceIndex {
 
   invalidate(): void {
     this.loadedAt = null
+    this.generation++
+    this.pending = null
   }
 
   private async load(force: boolean): Promise<WorkspaceEntry[]> {
     if (!force && this.loadedAt !== null && this.now() - this.loadedAt < this.ttlMs) return this.entries
-    const result = await this.list()
-    this.entries = result.workspaces
-    this.lastTruncated = result.truncated
-    this.loadedAt = this.now()
-    return this.entries
+    if (!force && this.pending) return this.pending
+    const generation = this.generation
+    const seq = ++this.seq
+    const p = this.list().then((result) => {
+      // Commit only if no invalidate() happened and no newer load has already committed.
+      if (generation === this.generation && seq > this.committedSeq) {
+        this.committedSeq = seq
+        this.entries = result.workspaces
+        this.lastTruncated = result.truncated
+        this.loadedAt = this.now()
+      }
+      return result.workspaces
+    })
+    this.pending = p
+    const clear = () => {
+      if (this.pending === p) this.pending = null
+    }
+    p.then(clear, clear)
+    return p
   }
 }

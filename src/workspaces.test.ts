@@ -78,3 +78,54 @@ test('truncated reflects the last list result', async () => {
   await idx.byId('w1')
   assert.equal(idx.truncated, true)
 })
+
+function manual() {
+  const resolvers: ((workspaces: WorkspaceEntry[]) => void)[] = []
+  const list = () =>
+    new Promise<{ workspaces: WorkspaceEntry[]; truncated: boolean }>((resolve) => {
+      resolvers.push((workspaces) => resolve({ workspaces, truncated: false }))
+    })
+  return { list, resolvers }
+}
+
+test('invalidate during an in-flight load discards its result', async () => {
+  const m = manual()
+  const idx = new WorkspaceIndex(m.list)
+  const first = idx.byId('w1')
+  idx.invalidate()
+  m.resolvers[0]([w1])
+  assert.equal((await first)?.id, 'w1')
+  const second = idx.byNameAndBranch('glab-server', 'main')
+  assert.equal(m.resolvers.length, 2)
+  m.resolvers[1]([w1, w2])
+  assert.equal((await second)?.id, 'w1')
+})
+
+test('concurrent lookups on a cold cache share one list call', async () => {
+  const m = manual()
+  const idx = new WorkspaceIndex(m.list)
+  const a = idx.byId('w1')
+  const b = idx.byId('w2')
+  assert.equal(m.resolvers.length, 1)
+  m.resolvers[0]([w1, w2])
+  assert.equal((await a)?.id, 'w1')
+  assert.equal((await b)?.id, 'w2')
+  assert.equal(m.resolvers.length, 1)
+})
+
+test('an older load resolving after a newer one does not overwrite it', async () => {
+  const m = manual()
+  const idx = new WorkspaceIndex(m.list)
+  const warm = idx.byId('w1')
+  m.resolvers[0]([w1])
+  await warm
+  const a = idx.byId('x') // miss -> forced load (list call 2)
+  const b = idx.byId('y') // miss -> forced load (list call 3)
+  await new Promise((r) => setImmediate(r))
+  assert.equal(m.resolvers.length, 3)
+  m.resolvers[2]([w1, w2]) // newer resolves first
+  m.resolvers[1]([w1]) // older resolves last
+  await Promise.all([a, b])
+  assert.equal((await idx.byNameAndBranch('glab', 'main'))?.id, 'w2')
+  assert.equal(m.resolvers.length, 3)
+})
