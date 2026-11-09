@@ -63,7 +63,40 @@ export function createActivate(deps: Partial<WorkerDeps>): (orca: OrcaWorkerApi)
     const reportCurrent = () => (switcher.current !== null ? setStatus(`persona: ${switcher.current}`) : undefined)
 
     orca.commands.register('persona.status', () => `persona: ${switcher.current ?? '—'}`)
-    orca.commands.register('persona.applyGit', () => 'not implemented')
+    orca.commands.register('persona.applyGit', async () => {
+      try {
+        const list = (await orca.host.call('workspace.list')) as Awaited<ReturnType<HostList>>
+        let applied = 0
+        let skipped = 0
+        let noPersona = 0
+        let remote = 0
+        // 같은 저장소 설정에 대한 쓰기가 겹치지 않도록 순차 처리한다.
+        for (const ws of list.workspaces) {
+          if (ws.hostId !== null) {
+            remote++
+            continue
+          }
+          const git = store.resolve(ws.path)?.git
+          if (!git) {
+            noPersona++
+            continue
+          }
+          const result = await applyGit(ws.path, git, log)
+          if (result === 'applied') {
+            applied++
+          } else {
+            skipped++
+            log(`깃 아이디 적용 건너뜀 ${ws.path}: ${result}`)
+          }
+        }
+        const summary = `applied ${applied}, skipped ${skipped}, no persona ${noPersona}, remote ${remote}`
+        return list.truncated ? `${summary} (truncated)` : summary
+      } catch (e) {
+        const reason = failureReason(e)
+        log(`깃 아이디 일괄 적용 실패: ${reason}`)
+        return `failed: ${reason}`
+      }
+    })
 
     orca.hooks.on('workspace.create.after', async (event) => {
       const persona = store.resolve(event.path)

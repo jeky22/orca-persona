@@ -16,6 +16,8 @@ type Opts = {
   rpcError?: Error
   listError?: boolean
   extraWorkspaces?: Record<string, unknown>[]
+  gitResults?: Record<string, 'applied' | 'skipped-existing' | 'skipped-not-git' | 'failed'>
+  truncated?: boolean
 }
 
 async function setup(opts: Opts = {}) {
@@ -44,13 +46,15 @@ async function setup(opts: Opts = {}) {
   const gitCalls: [string, GitIdentity][] = []
   const applyGit = async (repo: string, git: GitIdentity) => {
     gitCalls.push([repo, git])
-    return 'applied' as const
+    return opts.gitResults?.[path.relative(home, repo)] ?? ('applied' as const)
   }
   const workspaces = [
     { id: 'w1', kind: 'worktree', name: 'repo', path: `${home}/workspace/repo`, branch: 'main', hostId: null },
     { id: 'w2', kind: 'worktree', name: 'x', path: `${home}/side/x`, branch: 'main', hostId: null },
     { id: 'w3', kind: 'worktree', name: 'r', path: `${home}/workspace/r`, branch: 'main', hostId: 'ssh-1' },
-    ...(opts.extraWorkspaces ?? [])
+    ...(opts.extraWorkspaces ?? []).map((w) =>
+      typeof w.path === 'string' ? { ...w, path: w.path.replace('__HOME__', home) } : w
+    )
   ]
   const host = mockHost({
     results: {
@@ -58,7 +62,7 @@ async function setup(opts: Opts = {}) {
         ? () => {
             throw hostError('boom', 'list failed')
           }
-        : { workspaces, truncated: false },
+        : { workspaces, truncated: opts.truncated ?? false },
       'statusBar.update': {}
     }
   })
@@ -264,5 +268,27 @@ test('workspace.list 실패: launch는 deny, 포커스는 log와 경고 상태�
     assert.ok(t.worker.logs.some((l) => l.includes('페르소나 ? 적용 실패')))
     assert.equal(t.statusTexts().at(-1), 'persona: ? ⚠')
     assert.equal(t.rpcCalls.length, 0)
+  } finally { await t.cleanup() }
+})
+
+test('일괄 적용: applied/skipped/no persona/remote 집계, 대상 아닌 항목은 건드리지 않음', async () => {
+  const t = await setup({
+    extraWorkspaces: [
+      { id: 'w4', kind: 'worktree', name: 'repo4', path: '__HOME__/workspace/repo4', branch: 'main', hostId: null }
+    ],
+    gitResults: { 'workspace/repo4': 'skipped-existing' }
+  })
+  try {
+    const r = await t.worker.command('persona.applyGit')
+    assert.equal(r, 'applied 1, skipped 1, no persona 1, remote 1')
+    assert.deepEqual(t.gitCalls.map((c) => c[0]).sort(),
+      [`${t.home}/workspace/repo`, `${t.home}/workspace/repo4`])
+  } finally { await t.cleanup() }
+})
+
+test('일괄 적용, truncated: 결과에 (truncated) 덧붙임', async () => {
+  const t = await setup({ truncated: true })
+  try {
+    assert.equal(await t.worker.command('persona.applyGit'), 'applied 1, skipped 0, no persona 1, remote 1 (truncated)')
   } finally { await t.cleanup() }
 })
